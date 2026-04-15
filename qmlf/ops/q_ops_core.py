@@ -6,6 +6,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
 import xgboost as xgb
 from qiskit_machine_learning.algorithms import QSVC
+from sklearn.manifold import TSNE
+import plotly.graph_objects as go
 
 class QuantumKernel:
     fidelity_quantum_kernel = None
@@ -54,6 +56,29 @@ class QuantumKernel:
             raise ValueError(f"Unknown mode: {self.mode}")
         
         return kernel_matrix
+    
+def plot_hilbert_space(kernel_matrix, labels = None):
+    tsne = TSNE(n_components=3, random_state=42)
+    embedding = tsne.fit_transform(kernel_matrix)
+
+    fig = go.Figure(data=[go.Scatter3d(
+        x=embedding[:, 0],
+        y=embedding[:, 1],
+        z=embedding[:, 2],
+        mode='markers',
+        marker=dict(
+            size=8,
+            color=labels if labels is not None else embedding[:, 0],
+            colorscale='Viridis',
+            opacity=0.8
+        )
+    )])
+
+    fig.update_layout(title="Quantum Hilbert Space Visualization")
+    fig.show()
+    return fig
+    
+        
 
 def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2):
     X_train, X_test, y_train, y_test = train_test_split(
@@ -84,3 +109,28 @@ def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2):
     }
     
     return pd.DataFrame(results)
+
+if __name__ == "__main__":
+    print("Testing QuantumKernel + Benchmark + Visualization...")
+
+    # Create dummy data
+    X = np.random.rand(80, 6)          # 80 samples, 6 features
+    y = np.random.randint(0, 2, 80)    # binary labels
+
+    # Test 1: QuantumKernel
+    print("\n1. Testing QuantumKernel...")
+    kernel = QuantumKernel(n_qubits=4, mode="ZZ", reps=2)
+    kernel.fit(X)
+    K = kernel.compute_kernel_matrix(X)
+    print(f"Kernel matrix shape: {K.shape}")
+
+    # Test 2: Benchmark
+    print("\n2. Running benchmark...")
+    benchmark_df = run_quantum_benchmark(X, y, n_qubits=4)
+    print(benchmark_df)
+
+    # Test 3: Hilbert Space Visualization
+    print("\n3. Generating 3D Hilbert Space Visualization...")
+    plot_hilbert_space(K, labels=y)
+
+    print("\nAll tests completed successfully! ✓")
