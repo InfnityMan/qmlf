@@ -109,28 +109,3 @@ def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2):
     }
     
     return pd.DataFrame(results)
-
-if __name__ == "__main__":
-    print("Testing QuantumKernel + Benchmark + Visualization...")
-
-    # Create dummy data
-    X = np.random.rand(80, 6)          # 80 samples, 6 features
-    y = np.random.randint(0, 2, 80)    # binary labels
-
-    # Test 1: QuantumKernel
-    print("\n1. Testing QuantumKernel...")
-    kernel = QuantumKernel(n_qubits=4, mode="ZZ", reps=2)
-    kernel.fit(X)
-    K = kernel.compute_kernel_matrix(X)
-    print(f"Kernel matrix shape: {K.shape}")
-
-    # Test 2: Benchmark
-    print("\n2. Running benchmark...")
-    benchmark_df = run_quantum_benchmark(X, y, n_qubits=4)
-    print(benchmark_df)
-
-    # Test 3: Hilbert Space Visualization
-    print("\n3. Generating 3D Hilbert Space Visualization...")
-    plot_hilbert_space(K, labels=y)
-
-    print("\nAll tests completed successfully! ✓")
