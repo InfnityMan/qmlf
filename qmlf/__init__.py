@@ -6,3 +6,6 @@ from .noise.q_noise import NoiseAwareTrainer, create_noise_aware_trainer
 from .hybrid.q_hybrid import HybridQuantumLayer, create_hybrid_layer
 from .graph.q_graph import QuantumGraphKernel, create_graph_kernel
 from .federated.q_fed import FederatedQML, create_federated_qml
+from .transformer.q_transformer import QuantumTransformerLayer, create_quantum_transformer;
+from .chem.q_chem import QuantumChemistryLayer, create_chem_layer;
+from .nisq.q_nisq import NISQOptimizer, create_nisq_optimizer;
