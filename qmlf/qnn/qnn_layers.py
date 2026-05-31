@@ -1,44 +1,104 @@
 import numpy as np
 import torch
 from torch import nn
-from qiskit.circuit import QuantumCircuit, ParameterVector
-from qiskit.circuit.library import RealAmplitudes
-from qiskit_machine_learning.neural_networks import EstimatorQNN
-from qiskit.primitives import Estimator
 
-class IBIInitializer:
-    def __init__(self, num_qubits, reps=2):
-        self.num_qubits = num_qubits;
-        self.reps = reps;
+from qiskit.circuit.library import ZZFeatureMap, RealAmplitudes
+from qiskit_machine_learning.neural_networks import EstimatorQNN
+from qiskit_machine_learning.connectors import TorchConnector
+from qiskit.primitives import Estimator
+from qiskit.quantum_info import SparsePauliOp
+from qiskit_algorithms.gradients import ParamShiftEstimatorGradient
+
+
+class AdvancedIBIInitializer:
+    def __init__(self, num_qubits, reps=5, scale=0.1):
+        self.num_qubits = num_qubits
+        self.reps = reps
+        self.scale = scale
 
     def initialize_parameters(self, num_params):
-        params = np.zeros(num_params);
-        params += np.random.normal(0, 0.05, num_params);
-        return params;
+        params = np.zeros(num_params)
+        block_size = max(1, num_params // self.reps)
+
+        for i in range(self.reps):
+            start = i * block_size
+            end = min(start + block_size, num_params)
+
+            if start >= num_params:
+                break
+
+            params[start:end] += np.random.normal(0, self.scale, end - start)
+
+        return params
 
 
-class QuantumNNLayer(nn.Module):
-    def __init__(self, n_qubits=4, reps=2):
-        super().__init__();
-        self.n_qubits = n_qubits;
-        self.reps = reps;
-        
-        self.circuit = RealAmplitudes(num_qubits=n_qubits, reps=reps);
-        self.params = ParameterVector('θ', length=len(self.circuit.parameters));
-        
-        self.estimator = Estimator();
+class AdvancedQuantumNNLayer(nn.Module):
+    def __init__(self, n_qubits=8, reps=5, output_dim=16):
+        super().__init__()
+
+        self.n_qubits = n_qubits
+        self.reps = reps
+        self.output_dim = output_dim
+
+        self.feature_map = ZZFeatureMap(feature_dimension=n_qubits, reps=1)
+        self.ansatz = RealAmplitudes(num_qubits=n_qubits, reps=reps)
+        self.circuit = self.feature_map.compose(self.ansatz)
+
+        self.num_params = len(self.ansatz.parameters)
+
+        self.estimator = Estimator()
+        self.gradient = ParamShiftEstimatorGradient(self.estimator)
+
+        self.observables = self._create_observables()
+
         self.qnn = EstimatorQNN(
             circuit=self.circuit,
+            input_params=list(self.feature_map.parameters),
+            weight_params=list(self.ansatz.parameters),
+            observables=self.observables,
             estimator=self.estimator,
-            input_params=[],
-            weight_params=self.params
-        );
+            gradient=self.gradient,
+            input_gradients=True
+        )
+
+        self.initial_weights = AdvancedIBIInitializer(
+            self.n_qubits,
+            self.reps
+        ).initialize_parameters(self.num_params)
+
+        self.quantum_layer = TorchConnector(
+            self.qnn,
+            initial_weights=self.initial_weights
+        )
+
+        self.classical_head = nn.Sequential(
+            nn.Linear(n_qubits, 48),
+            nn.LayerNorm(48),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(48, output_dim),
+            nn.LayerNorm(output_dim)
+        )
+
+    def _create_observables(self):
+        observables = []
+
+        for i in range(self.n_qubits):
+            pauli = ["I"] * self.n_qubits
+            pauli[self.n_qubits - i - 1] = "Z"
+            observables.append(SparsePauliOp.from_list([("".join(pauli), 1.0)]))
+
+        return observables
 
     def forward(self, x):
-        batch_size = x.shape[0];
-        return torch.zeros(batch_size, self.n_qubits, device=x.device);
+        if x.shape[1] != self.n_qubits:
+            raise ValueError(
+                f"Expected input with {self.n_qubits} features, got {x.shape[1]}"
+            )
+
+        quantum_out = self.quantum_layer(x)
+        return self.classical_head(quantum_out)
 
 
-def create_quantum_layer(n_qubits=4, reps=2):
-    layer = QuantumNNLayer(n_qubits, reps);
-    return layer;
+def create_advanced_qnn_layer(n_qubits=8, reps=5, output_dim=16):
+    return AdvancedQuantumNNLayer(n_qubits, reps, output_dim)
