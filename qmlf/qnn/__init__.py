@@ -1,1 +1,1 @@
-from .qnn_layers import IBIInitializer, QuantumNNLayer, create_quantum_layer;
+from .qnn_layers import AdvancedIBIInitializer, AdvancedQuantumNNLayer, create_advanced_qnn_layer

@@ -2,10 +2,10 @@ import numpy as np
 import torch
 from torch import nn
 
-from qiskit.circuit.library import ZZFeatureMap, RealAmplitudes
+from qiskit.circuit.library import zz_feature_map, real_amplitudes
 from qiskit_machine_learning.neural_networks import EstimatorQNN
 from qiskit_machine_learning.connectors import TorchConnector
-from qiskit.primitives import Estimator
+from qiskit.primitives import StatevectorEstimator
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_algorithms.gradients import ParamShiftEstimatorGradient
 
@@ -17,8 +17,10 @@ class AdvancedIBIInitializer:
         self.scale = scale
 
     def initialize_parameters(self, num_params):
+        """Identity-Block Initialization: small-angle, near-identity weights whose per-block std shrinks with reps to mitigate barren plateaus."""
         params = np.zeros(num_params)
         block_size = max(1, num_params // self.reps)
+        std = self.scale / np.sqrt(self.reps)
 
         for i in range(self.reps):
             start = i * block_size
@@ -27,7 +29,7 @@ class AdvancedIBIInitializer:
             if start >= num_params:
                 break
 
-            params[start:end] += np.random.normal(0, self.scale, end - start)
+            params[start:end] += np.random.normal(0, std, end - start)
 
         return params
 
@@ -40,13 +42,13 @@ class AdvancedQuantumNNLayer(nn.Module):
         self.reps = reps
         self.output_dim = output_dim
 
-        self.feature_map = ZZFeatureMap(feature_dimension=n_qubits, reps=1)
-        self.ansatz = RealAmplitudes(num_qubits=n_qubits, reps=reps)
+        self.feature_map = zz_feature_map(feature_dimension=n_qubits, reps=1)
+        self.ansatz = real_amplitudes(num_qubits=n_qubits, reps=reps)
         self.circuit = self.feature_map.compose(self.ansatz)
 
         self.num_params = len(self.ansatz.parameters)
 
-        self.estimator = Estimator()
+        self.estimator = StatevectorEstimator()
         self.gradient = ParamShiftEstimatorGradient(self.estimator)
 
         self.observables = self._create_observables()

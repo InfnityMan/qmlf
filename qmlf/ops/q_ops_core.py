@@ -1,65 +1,90 @@
 import numpy as np
 import pandas as pd
-from qiskit.circuit.library import ZZFeatureMap
+from qiskit.circuit.library import zz_feature_map
 from qiskit_machine_learning.kernels import FidelityQuantumKernel
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
 import xgboost as xgb
 from qiskit_machine_learning.algorithms import QSVC
 from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
 import plotly.graph_objects as go
 
-class QuantumKernel:
-    fidelity_quantum_kernel = None
-    feature_map = None
-    kernel_matrix = None
-    cov_matrix = None
-    num_quibits = None
-    mode = None
-    reps = None
 
+class QuantumKernel:
     def __init__(self, n_qubits, mode="ZZ", reps=2):
         self.n_qubits = n_qubits
         self.mode = mode
         self.reps = reps
         self.cov_matrix = None
-        self.feature_map = None
-        self.fidelity_quantum_kernel = None
-        
+        self.whitening_matrix = None
+        self.X_train_ = None
+
         if mode == "ZZ" or mode == "covariant":
-            self.feature_map = ZZFeatureMap(feature_dimension=n_qubits, reps=reps)
+            self.feature_map = zz_feature_map(feature_dimension=n_qubits, reps=reps)
         else:
             raise ValueError(f"Unknown mode: {mode}")
-        
+
         self.fidelity_quantum_kernel = FidelityQuantumKernel(feature_map=self.feature_map)
-    
+
     def fit(self, X_train, y=None):
+        X_np = np.asarray(X_train, dtype=float)
+        self.X_train_ = X_np
+
         if self.mode == "covariant":
-            X_np = np.asarray(X_train)
             self.cov_matrix = np.cov(X_np.T)
+            self.whitening_matrix = self._compute_whitening(self.cov_matrix)
 
         return self
-    
-    def compute_kernel_matrix(self, X):
-        X_np = np.asarray(X)
-        
-        if self.mode == "ZZ":
-            kernel_matrix = self.fidelity_quantum_kernel.evaluate(X_np)
-        elif self.mode == "covariant":
-            if self.cov_matrix is None:
+
+    def _compute_whitening(self, cov_matrix):
+        # Symmetric whitening transform from the full data covariance:
+        # W = V diag(1/sqrt(lambda)) V^T, so that X @ W has identity covariance.
+        cov_matrix = np.atleast_2d(cov_matrix)
+        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        inv_sqrt = 1.0 / np.sqrt(np.maximum(eigenvalues, 0) + 1e-8)
+        whitening = eigenvectors @ np.diag(inv_sqrt) @ eigenvectors.T
+
+        return whitening
+
+    def _prepare(self, X):
+        X_np = np.asarray(X, dtype=float)
+
+        if self.mode == "covariant":
+            if self.whitening_matrix is None:
                 raise ValueError("Must call .fit() before using covariant mode")
-            variances = np.diag(self.cov_matrix)
-            scaling = np.sqrt(variances + 1e-8)
-            X_scaled = X_np / scaling
-            kernel_matrix = self.fidelity_quantum_kernel.evaluate(X_scaled)
-        else:
-            raise ValueError(f"Unknown mode: {self.mode}")
-        
-        return kernel_matrix
-    
-def plot_hilbert_space(kernel_matrix, labels = None):
-    tsne = TSNE(n_components=3, random_state=42)
-    embedding = tsne.fit_transform(kernel_matrix)
+            return X_np @ self.whitening_matrix
+
+        return X_np
+
+    def compute_kernel_matrix(self, X, X2=None):
+        # ZZ mode: plain quantum fidelity kernel.
+        # covariant mode: covariance-adapted (whitened) quantum fidelity kernel.
+        X_prepared = self._prepare(X)
+
+        if X2 is None:
+            return self.fidelity_quantum_kernel.evaluate(X_prepared)
+
+        X2_prepared = self._prepare(X2)
+
+        return self.fidelity_quantum_kernel.evaluate(X_prepared, X2_prepared)
+
+
+def plot_hilbert_space(kernel_matrix, labels=None):
+    kernel_matrix = np.asarray(kernel_matrix, dtype=float)
+    n_samples = kernel_matrix.shape[0]
+
+    if n_samples > 3:
+        perplexity = min(30, max(2, n_samples - 1))
+        tsne = TSNE(n_components=3, random_state=42, perplexity=perplexity)
+        embedding = tsne.fit_transform(kernel_matrix)
+    else:
+        pca = PCA(n_components=min(3, n_samples))
+        embedding = pca.fit_transform(kernel_matrix)
+        if embedding.shape[1] < 3:
+            padded = np.zeros((embedding.shape[0], 3))
+            padded[:, :embedding.shape[1]] = embedding
+            embedding = padded
 
     fig = go.Figure(data=[go.Scatter3d(
         x=embedding[:, 0],
@@ -77,19 +102,23 @@ def plot_hilbert_space(kernel_matrix, labels = None):
     fig.update_layout(title="Quantum Hilbert Space Visualization")
     fig.show()
     return fig
-    
-        
+
 
 def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2):
+    X = np.asarray(X, dtype=float)
+
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=42
     )
 
-    xgb_model = xgb.XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+    xgb_model = xgb.XGBClassifier(eval_metric="logloss")
     xgb_model.fit(X_train, y_train)
     y_pred_xgb = xgb_model.predict(X_test)
 
-    quantum_kernel = QuantumKernel(n_qubits=n_qubits, mode="ZZ", reps=reps)
+    # The ZZ feature map dimension must equal the number of input features,
+    # so the quantum kernel is built over all features (n_qubits is a hint).
+    n_features = X.shape[1]
+    quantum_kernel = QuantumKernel(n_qubits=n_features, mode="ZZ", reps=reps)
     quantum_kernel.fit(X_train)
 
     qsvc = QSVC(quantum_kernel=quantum_kernel.fidelity_quantum_kernel)
@@ -107,5 +136,5 @@ def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2):
             f1_score(y_test, y_pred_qsvc, average='weighted')
         ]
     }
-    
+
     return pd.DataFrame(results)
