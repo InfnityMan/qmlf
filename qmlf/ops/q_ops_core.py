@@ -12,10 +12,12 @@ import plotly.graph_objects as go
 
 
 class QuantumKernel:
-    def __init__(self, n_qubits, mode="ZZ", reps=2):
+    def __init__(self, n_qubits, mode="ZZ", reps=2, shrinkage=1e-3):
         self.n_qubits = n_qubits
         self.mode = mode
         self.reps = reps
+        self.shrinkage = shrinkage
+        self.mean_ = None
         self.cov_matrix = None
         self.whitening_matrix = None
         self.X_train_ = None
@@ -32,16 +34,28 @@ class QuantumKernel:
         self.X_train_ = X_np
 
         if self.mode == "covariant":
-            self.cov_matrix = np.cov(X_np.T)
+            self.mean_ = X_np.mean(axis=0)
+            centered = X_np - self.mean_
+            self.cov_matrix = np.cov(centered, rowvar=False)
             self.whitening_matrix = self._compute_whitening(self.cov_matrix)
 
         return self
 
     def _compute_whitening(self, cov_matrix):
-        # Symmetric whitening transform from the full data covariance:
-        # W = V diag(1/sqrt(lambda)) V^T, so that X @ W has identity covariance.
+        # Mahalanobis whitening from the training-data covariance. The covariance
+        # is first shrunk toward a scaled identity (Ledoit-Wolf-style) so the
+        # inverse square root stays well-conditioned even when features are
+        # collinear, then W = V diag(1/sqrt(lambda)) V^T. Mapping the centered
+        # data through W gives it identity covariance, so a Euclidean distance in
+        # the transformed space is exactly the Mahalanobis distance of the raw
+        # data, d(x, y) = sqrt((x - y)^T Sigma^-1 (x - y)).
         cov_matrix = np.atleast_2d(cov_matrix)
-        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        dim = cov_matrix.shape[0]
+
+        target = np.trace(cov_matrix) / dim
+        shrunk = (1.0 - self.shrinkage) * cov_matrix + self.shrinkage * target * np.eye(dim)
+
+        eigenvalues, eigenvectors = np.linalg.eigh(shrunk)
         inv_sqrt = 1.0 / np.sqrt(np.maximum(eigenvalues, 0) + 1e-8)
         whitening = eigenvectors @ np.diag(inv_sqrt) @ eigenvectors.T
 
@@ -53,7 +67,7 @@ class QuantumKernel:
         if self.mode == "covariant":
             if self.whitening_matrix is None:
                 raise ValueError("Must call .fit() before using covariant mode")
-            return X_np @ self.whitening_matrix
+            return (X_np - self.mean_) @ self.whitening_matrix
 
         return X_np
 
