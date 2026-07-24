@@ -1,3 +1,12 @@
+import os
+
+# Qiskit's fidelity kernel and Torch's QNN forward pass each bring in their own
+# OpenMP runtime; running both back to back in one process can crash on some
+# platforms once more than one thread pool spins up. Capping to a single
+# thread here (only if the caller hasn't already set one) sidesteps that
+# without touching anyone else's OpenMP configuration.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import numpy as np
 import torch
 
@@ -10,15 +19,21 @@ class QuantumPipeline:
     """One-line quantum workflow: kernel -> QNN -> visualization.
 
     Wires a :class:`QuantumKernel`, an advanced variational quantum
-    neural-network layer and the :class:`QVizPro` plotting helpers together so a
-    full quantum feature pipeline can be run and inspected in a single call.
+    neural-network layer and the :class:`QVizPro` plotting helpers together so
+    a full quantum feature pipeline can be run and inspected in a single call.
 
     The number of qubits is inferred from the data when it is not given, since
     both the ZZ feature map and the QNN feature map read one angle per input
     feature.
     """
 
-    def __init__(self, n_qubits=None, mode="ZZ", reps=2, output_dim=16):
+    def __init__(
+        self,
+        n_qubits=None,
+        mode="ZZ",
+        reps=2,
+        output_dim=16
+    ):
         self.n_qubits = n_qubits
         self.mode = mode
         self.reps = reps
@@ -31,7 +46,12 @@ class QuantumPipeline:
         self.qnn_output_ = None
 
     def _build(self, n_features):
-        n_qubits = self.n_qubits if self.n_qubits is not None else n_features
+        n_qubits = (
+            self.n_qubits
+            if self.n_qubits is not None
+            else n_features
+        )
+
         self.n_qubits = n_qubits
 
         self.kernel = QuantumKernel(
@@ -46,11 +66,21 @@ class QuantumPipeline:
             output_dim=self.output_dim
         )
 
-    def run(self, X, labels=None, visualize=True, show=True, save_path=None):
+    def run(
+        self,
+        X,
+        labels=None,
+        visualize=True,
+        show=True,
+        save_path=None,
+        batch_size=None
+    ):
         X_np = np.asarray(X, dtype=float)
 
         if X_np.ndim != 2:
-            raise ValueError("X must be a 2D array of shape (n_samples, n_features)")
+            raise ValueError(
+                "X must be a 2D array of shape (n_samples, n_features)"
+            )
 
         if self.kernel is None or self.qnn_layer is None:
             self._build(X_np.shape[1])
@@ -60,15 +90,31 @@ class QuantumPipeline:
                 f"Expected input with {self.n_qubits} features, got {X_np.shape[1]}"
             )
 
-        # 1. quantum fidelity kernel over the (optionally covariance-adapted) data.
+        # 1. quantum fidelity kernel over the (optionally covariance-adapted)
+        # data. batch_size bounds peak memory for larger datasets; see
+        # QuantumKernel.compute_kernel_matrix.
         self.kernel.fit(X_np)
-        self.kernel_matrix_ = self.kernel.compute_kernel_matrix(X_np)
+
+        self.kernel_matrix_ = self.kernel.compute_kernel_matrix(
+            X_np,
+            batch_size=batch_size
+        )
 
         # 2. per-qubit Z read-out from the variational quantum neural network.
-        x_tensor = torch.tensor(X_np, dtype=torch.float32)
+        x_tensor = torch.tensor(
+            X_np,
+            dtype=torch.float32
+        )
 
         with torch.no_grad():
-            self.qnn_output_ = self.qnn_layer(x_tensor).detach().cpu().numpy()
+            qnn_out = self.qnn_layer(x_tensor)
+
+        self.qnn_output_ = (
+            qnn_out
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
         # 3. project the kernel into Hilbert space for inspection.
         figure = None
@@ -94,7 +140,12 @@ class QuantumPipeline:
         return self.qnn_layer
 
 
-def create_quantum_pipeline(n_qubits=None, mode="ZZ", reps=2, output_dim=16):
+def create_quantum_pipeline(
+    n_qubits=None,
+    mode="ZZ",
+    reps=2,
+    output_dim=16
+):
     return QuantumPipeline(
         n_qubits=n_qubits,
         mode=mode,

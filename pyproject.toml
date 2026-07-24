@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qmlf"
+dynamic = ["version", "readme", "dependencies"]
+description = "A quantum machine learning framework built on Qiskit, PyTorch and scikit-learn."
+authors = [{ name = "InfnityMan" }]
+license = "Apache-2.0"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Intended Audience :: Science/Research"
+]
+
+[project.urls]
+Homepage = "https://github.com/InfnityMan/qmlf"
+
+[project.scripts]
+qmlf = "qmlf.cli:main"
+
+[project.optional-dependencies]
+dev = ["build", "twine"]
+
+[tool.setuptools.dynamic]
+version = { attr = "qmlf.__version__" }
+readme = { file = "README.md", content-type = "text/markdown" }
+dependencies = { file = "requirements.txt" }
+
+[tool.setuptools.packages.find]
+include = ["qmlf", "qmlf.*"]

@@ -71,17 +71,34 @@ class QuantumKernel:
 
         return X_np
 
-    def compute_kernel_matrix(self, X, X2=None):
+    def compute_kernel_matrix(self, X, X2=None, batch_size=None):
         # ZZ mode: plain quantum fidelity kernel.
         # covariant mode: covariance-adapted (whitened) quantum fidelity kernel.
         X_prepared = self._prepare(X)
+        X2_prepared = self._prepare(X2) if X2 is not None else None
 
-        if X2 is None:
-            return self.fidelity_quantum_kernel.evaluate(X_prepared)
+        if batch_size is None:
+            if X2_prepared is None:
+                return self.fidelity_quantum_kernel.evaluate(X_prepared)
 
-        X2_prepared = self._prepare(X2)
+            return self.fidelity_quantum_kernel.evaluate(X_prepared, X2_prepared)
 
-        return self.fidelity_quantum_kernel.evaluate(X_prepared, X2_prepared)
+        return self._compute_kernel_matrix_batched(X_prepared, X2_prepared, batch_size)
+
+    def _compute_kernel_matrix_batched(self, X_prepared, X2_prepared, batch_size):
+        # Evaluates the kernel a row-chunk of X at a time so that no single
+        # fidelity evaluation has to build circuits for the full cross product
+        # at once. This bounds peak memory to batch_size * len(target) pairs
+        # instead of len(X) * len(target), at the cost of the symmetry shortcut
+        # a plain evaluate(X) can take when X2 is None.
+        target = X_prepared if X2_prepared is None else X2_prepared
+
+        rows = [
+            self.fidelity_quantum_kernel.evaluate(X_prepared[start:start + batch_size], target)
+            for start in range(0, X_prepared.shape[0], batch_size)
+        ]
+
+        return np.vstack(rows)
 
 
 def plot_hilbert_space(kernel_matrix, labels=None):
