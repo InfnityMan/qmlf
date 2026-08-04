@@ -34,6 +34,32 @@ kernel = QuantumKernel(n_qubits=4, mode="ZZ").fit(X)
 gram = kernel.compute_kernel_matrix(X)   # 20 x 20 kernel matrix
 ```
 
+**Tune the bandwidth.** Fidelity kernels concentrate: as the encoding angles
+span a wider range, off-diagonal similarities collapse toward zero, the Gram
+matrix approaches the identity, and a downstream SVM memorises the training set
+instead of generalising. `bandwidth` scales the angles down and is usually the
+single most valuable thing to sweep — on a real benchmark it was worth roughly
+0.3 AUROC:
+
+```python
+kernel = QuantumKernel(n_qubits=4, mode="ZZ", bandwidth=0.1).fit(X)
+```
+
+For `mode="covariant"` (alias `"mahalanobis"` — Mahalanobis/ZCA whitening then a
+ZZ map, *not* the group-covariant kernel of Glick et al.) also pass
+`normalize="maxabs"`. Whitening cancels any scaling applied to its input, so
+without normalisation the whitened angles can exceed `[-pi, pi]` and alias:
+
+```python
+kernel = QuantumKernel(
+    n_qubits=4, mode="mahalanobis", bandwidth=0.5, normalize="maxabs"
+).fit(X)
+```
+
+Both are available from the CLI too (`--bandwidth`, `--normalize`). To run
+against real hardware or a noisy simulator, pass `fidelity=` or `sampler=`; the
+exact statevector fast path is used automatically only when neither is given.
+
 Drop a trainable quantum layer into a torch model:
 
 ```python

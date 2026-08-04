@@ -73,7 +73,9 @@ def _run_visualize(args):
     kernel = QuantumKernel(
         n_qubits=n_features,
         mode=args.mode,
-        reps=args.reps
+        reps=args.reps,
+        bandwidth=args.bandwidth,
+        normalize=args.normalize
     )
 
     kernel.fit(X)
@@ -106,7 +108,9 @@ def _run_pipeline(args):
         n_qubits=args.n_qubits,
         mode=args.mode,
         reps=args.reps,
-        output_dim=args.output_dim
+        output_dim=args.output_dim,
+        bandwidth=args.bandwidth,
+        normalize=args.normalize
     )
 
     result = pipeline.run(
@@ -139,6 +143,31 @@ def _run_optimize_circuit(args):
 
     for key, value in report.items():
         print(f"{key}: {value}")
+
+
+def _add_kernel_tuning_arguments(subparser):
+    # Fidelity kernels concentrate as the encoding angles widen, so bandwidth is
+    # usually the single most important knob to sweep; see QuantumKernel's
+    # docstring. Exposed here so the CLI can reach it, not just Python callers.
+    subparser.add_argument(
+        "--bandwidth",
+        type=float,
+        default=1.0,
+        help=(
+            "Scale factor on the encoding angles. Lower values widen the kernel "
+            "and usually help; try 0.5 / 0.25 / 0.1. Default 1.0."
+        )
+    )
+
+    subparser.add_argument(
+        "--normalize",
+        default=None,
+        choices=["maxabs", "std"],
+        help=(
+            "Rescale prepared angles by a train-fitted scale before bandwidth. "
+            "Required for covariant/mahalanobis mode to respond to --bandwidth."
+        )
+    )
 
 
 def _add_dataset_arguments(subparser):
@@ -215,12 +244,13 @@ def build_parser():
     )
 
     _add_dataset_arguments(visualize)
+    _add_kernel_tuning_arguments(visualize)
 
     visualize.add_argument(
         "--mode",
         default="ZZ",
-        choices=["ZZ", "covariant"],
-        help="Quantum kernel mode."
+        choices=["ZZ", "covariant", "mahalanobis"],
+        help="Quantum kernel mode ('mahalanobis' is the accurate alias of 'covariant')."
     )
 
     visualize.add_argument(
@@ -251,12 +281,13 @@ def build_parser():
     )
 
     _add_dataset_arguments(pipeline)
+    _add_kernel_tuning_arguments(pipeline)
 
     pipeline.add_argument(
         "--mode",
         default="ZZ",
-        choices=["ZZ", "covariant"],
-        help="Quantum kernel mode."
+        choices=["ZZ", "covariant", "mahalanobis"],
+        help="Quantum kernel mode ('mahalanobis' is the accurate alias of 'covariant')."
     )
 
     pipeline.add_argument(

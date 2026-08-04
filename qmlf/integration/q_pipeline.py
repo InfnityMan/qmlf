@@ -32,12 +32,17 @@ class QuantumPipeline:
         n_qubits=None,
         mode="ZZ",
         reps=2,
-        output_dim=16
+        output_dim=16,
+        *,
+        bandwidth=1.0,
+        normalize=None
     ):
         self.n_qubits = n_qubits
         self.mode = mode
         self.reps = reps
         self.output_dim = output_dim
+        self.bandwidth = bandwidth
+        self.normalize = normalize
 
         self.kernel = None
         self.qnn_layer = None
@@ -57,7 +62,9 @@ class QuantumPipeline:
         self.kernel = QuantumKernel(
             n_qubits=n_qubits,
             mode=self.mode,
-            reps=self.reps
+            reps=self.reps,
+            bandwidth=self.bandwidth,
+            normalize=self.normalize
         )
 
         self.qnn_layer = create_advanced_qnn_layer(
@@ -144,11 +151,16 @@ def create_quantum_pipeline(
     n_qubits=None,
     mode="ZZ",
     reps=2,
-    output_dim=16
+    output_dim=16,
+    *,
+    bandwidth=1.0,
+    normalize=None
 ):
     return QuantumPipeline(
         n_qubits=n_qubits,
         mode=mode,
         reps=reps,
-        output_dim=output_dim
+        output_dim=output_dim,
+        bandwidth=bandwidth,
+        normalize=normalize
     )
