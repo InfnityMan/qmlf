@@ -1,6 +1,9 @@
+import warnings
+
 import numpy as np
 import pandas as pd
-from qiskit.circuit.library import zz_feature_map
+from qiskit.circuit import QuantumCircuit
+from qiskit.circuit.library import z_feature_map, zz_feature_map
 from qiskit.quantum_info import Statevector
 from qiskit_machine_learning.kernels import FidelityQuantumKernel
 from sklearn.model_selection import train_test_split
@@ -18,6 +21,13 @@ from sklearn.decomposition import PCA
 # the accurate name and is preferred in new code (see the class docstring).
 _COVARIANT_MODES = ("covariant", "mahalanobis")
 _VALID_MODES = ("ZZ",) + _COVARIANT_MODES
+
+_BUILTIN_FEATURE_MAPS = ("zz", "z")
+
+# Distinguishes "caller did not pass entanglement" from "caller explicitly asked
+# for the default", so a meaningless combination can be reported instead of
+# silently swallowed.
+_UNSET = object()
 
 
 class QuantumKernel:
@@ -48,7 +58,9 @@ class QuantumKernel:
     the identity, and an SVM on top of it memorises the training set instead of
     generalising. ``bandwidth`` scales the encoding angles and is the standard
     remedy; it is a genuine hyperparameter and is usually worth tuning over
-    something like ``[1.0, 0.5, 0.25, 0.1, 0.05]``.
+    something like ``[1.0, 0.5, 0.25, 0.1, 0.05, 0.025, 0.01]``. Tuners have
+    been observed selecting the bottom of a grid that stopped at 0.05, so extend
+    the range downward rather than assuming 0.05 is a floor.
 
     It is applied as the *last* step of :meth:`_prepare`, i.e. after whitening.
     Applying it before whitening would be cancelled exactly: scaling ``X`` by
@@ -66,12 +78,37 @@ class QuantumKernel:
     not leak. ``normalize="maxabs"`` bounds the output to ``[-1, 1]`` before
     ``bandwidth`` is applied.
 
+    Encoding
+    --------
+    ``feature_map`` selects the encoding circuit and ``entanglement`` is passed
+    through to it:
+
+    - ``"zz"`` (default) -- :func:`zz_feature_map`, honouring ``entanglement``
+      (``"full"``, ``"linear"``, ``"circular"``, ...).
+    - ``"z"`` -- :func:`z_feature_map`, a product encoding with **no**
+      entangling gates. ``entanglement`` has no effect here and passing it
+      warns.
+    - a Qiskit :class:`QuantumCircuit` -- used directly, so the encoding is a
+      first-class hyperparameter. It must have ``n_qubits`` qubits and exactly
+      ``n_qubits`` free parameters.
+
+    Entanglement drives the concentration that ``bandwidth`` compensates for, so
+    the two interact; sweeping them together is reasonable. On at least one real
+    dataset the unentangled ``"z"`` map matched or beat ``"zz"`` while running
+    6-11x faster, so the entangled default is not automatically the right
+    choice.
+
+    Assigning to ``.feature_map`` after construction rebuilds the underlying
+    fidelity kernel, so the swap applies to both the statevector and pairwise
+    paths.
+
     All parameters after ``shrinkage`` are keyword-only, and their defaults
     reproduce the previous numeric behaviour exactly.
     """
 
     def __init__(self, n_qubits, mode="ZZ", reps=2, shrinkage=1e-3, *,
-                 bandwidth=1.0, normalize=None, fidelity=None, sampler=None,
+                 bandwidth=1.0, normalize=None, feature_map="zz",
+                 entanglement=_UNSET, fidelity=None, sampler=None,
                  fast_statevector="auto"):
         self.n_qubits = n_qubits
         self.mode = mode
@@ -79,6 +116,8 @@ class QuantumKernel:
         self.shrinkage = shrinkage
         self.bandwidth = bandwidth
         self.normalize = normalize
+        self.feature_map_spec = feature_map
+        self.entanglement = "full" if entanglement is _UNSET else entanglement
         self.fast_statevector = fast_statevector
         self.mean_ = None
         self.cov_matrix = None
@@ -97,27 +136,134 @@ class QuantumKernel:
         if not np.isfinite(bandwidth) or bandwidth <= 0:
             raise ValueError(f"bandwidth must be a positive finite number, got {bandwidth}")
 
-        self.feature_map = zz_feature_map(feature_dimension=n_qubits, reps=reps)
+        # Whitened angles routinely leave [-pi, pi] and alias, which collapses
+        # the kernel; without a normalisation this mode has been observed to go
+        # fully degenerate (every sample predicted as one class). Warn rather
+        # than change the default, which would be a breaking numeric change.
+        if mode in _COVARIANT_MODES and normalize is None:
+            warnings.warn(
+                f"mode={mode!r} with normalize=None: whitening produces angles "
+                "outside [-pi, pi] that alias in the feature map, and bandwidth "
+                "cannot compensate. Pass normalize='maxabs' unless you are "
+                "deliberately reproducing pre-1.2 behaviour.",
+                UserWarning,
+                stacklevel=2
+            )
 
         # A caller-supplied fidelity or sampler means the kernel may be
         # shot-based or noisy, so the exact statevector shortcut no longer
         # applies and "auto" falls back to the pairwise path.
         self._custom_fidelity = fidelity is not None or sampler is not None
+        self._fidelity = fidelity
+        self._sampler = sampler
 
-        if fidelity is None and sampler is not None:
+        self._set_feature_map(
+            self._build_feature_map(feature_map, entanglement)
+        )
+
+    def _build_feature_map(self, feature_map, entanglement):
+        # A caller-supplied circuit makes the encoding a first-class
+        # hyperparameter without this class having to enumerate every option.
+        if isinstance(feature_map, QuantumCircuit):
+            if feature_map.num_qubits != self.n_qubits:
+                raise ValueError(
+                    f"feature_map circuit has {feature_map.num_qubits} qubits, "
+                    f"expected {self.n_qubits}"
+                )
+
+            if feature_map.num_parameters != self.n_qubits:
+                raise ValueError(
+                    f"feature_map circuit has {feature_map.num_parameters} free "
+                    f"parameters, expected {self.n_qubits} (one angle per feature)"
+                )
+
+            if entanglement is not _UNSET:
+                warnings.warn(
+                    "entanglement is ignored when feature_map is a QuantumCircuit; "
+                    "build the entanglement into the circuit instead.",
+                    UserWarning,
+                    stacklevel=3
+                )
+
+            return feature_map
+
+        if feature_map == "zz":
+            return zz_feature_map(
+                feature_dimension=self.n_qubits,
+                reps=self.reps,
+                entanglement=self.entanglement
+            )
+
+        if feature_map == "z":
+            # z_feature_map accepts an entanglement argument but has no
+            # multi-qubit terms, so it is a genuine no-op. Say so rather than
+            # letting a swept grid silently produce duplicate rows.
+            if entanglement is not _UNSET:
+                warnings.warn(
+                    f"entanglement={self.entanglement!r} has no effect with "
+                    "feature_map='z' (no entangling gates); results will be "
+                    "identical across entanglement values.",
+                    UserWarning,
+                    stacklevel=3
+                )
+
+            return z_feature_map(feature_dimension=self.n_qubits, reps=self.reps)
+
+        raise ValueError(
+            f"Unknown feature_map: {feature_map!r} "
+            f"(expected one of {_BUILTIN_FEATURE_MAPS} or a QuantumCircuit)"
+        )
+
+    def _set_feature_map(self, circuit):
+        # The fidelity kernel caches the circuit, so it has to be rebuilt
+        # alongside it. Without this, assigning to .feature_map would change the
+        # statevector path but not the pairwise path -- the same result silently
+        # depending on which backend happened to be selected.
+        self._feature_map = circuit
+
+        if self._fidelity is None and self._sampler is not None:
             from qiskit_machine_learning.state_fidelities import ComputeUncompute
 
-            fidelity = ComputeUncompute(sampler=sampler)
+            self._fidelity = ComputeUncompute(sampler=self._sampler)
 
-        if fidelity is None:
-            self.fidelity_quantum_kernel = FidelityQuantumKernel(
-                feature_map=self.feature_map
+        if self._fidelity is None:
+            self._fidelity_quantum_kernel = FidelityQuantumKernel(
+                feature_map=circuit
             )
         else:
-            self.fidelity_quantum_kernel = FidelityQuantumKernel(
-                feature_map=self.feature_map,
-                fidelity=fidelity
+            self._fidelity_quantum_kernel = FidelityQuantumKernel(
+                feature_map=circuit,
+                fidelity=self._fidelity
             )
+
+    @property
+    def feature_map(self):
+        return self._feature_map
+
+    @feature_map.setter
+    def feature_map(self, circuit):
+        self._set_feature_map(circuit)
+
+    @property
+    def fidelity_quantum_kernel(self):
+        # Handing this straight to QSVC bypasses _prepare entirely, which
+        # silently discards whitening, normalize and bandwidth -- the caller
+        # gets a plain unscaled kernel and no error. Warn when that would
+        # actually change the answer.
+        if (self.mode in _COVARIANT_MODES
+                or self.bandwidth != 1.0
+                or self.normalize is not None):
+            warnings.warn(
+                "Using .fidelity_quantum_kernel directly bypasses _prepare, so "
+                f"mode={self.mode!r}, bandwidth={self.bandwidth} and "
+                f"normalize={self.normalize!r} will be IGNORED. Use "
+                ".compute_kernel_matrix(X) / .compute_kernel_matrix(X_test, "
+                "X_train) with sklearn's SVC(kernel='precomputed') instead.",
+                UserWarning,
+                stacklevel=2
+            )
+
+        return self._fidelity_quantum_kernel
 
     def fit(self, X_train, y=None):
         X_np = np.asarray(X_train, dtype=float)
@@ -239,9 +385,9 @@ class QuantumKernel:
 
         if batch_size is None:
             if X2_prepared is None:
-                return self.fidelity_quantum_kernel.evaluate(X_prepared)
+                return self._fidelity_quantum_kernel.evaluate(X_prepared)
 
-            return self.fidelity_quantum_kernel.evaluate(X_prepared, X2_prepared)
+            return self._fidelity_quantum_kernel.evaluate(X_prepared, X2_prepared)
 
         return self._compute_kernel_matrix_batched(X_prepared, X2_prepared, batch_size)
 
@@ -270,7 +416,7 @@ class QuantumKernel:
         target = X_prepared if X2_prepared is None else X2_prepared
 
         rows = [
-            self.fidelity_quantum_kernel.evaluate(X_prepared[start:start + batch_size], target)
+            self._fidelity_quantum_kernel.evaluate(X_prepared[start:start + batch_size], target)
             for start in range(0, X_prepared.shape[0], batch_size)
         ]
 
@@ -313,11 +459,13 @@ def plot_hilbert_space(kernel_matrix, labels=None):
     return fig
 
 
-def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2):
+def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2, *,
+                          mode="ZZ", bandwidth=1.0, normalize=None,
+                          feature_map="zz", entanglement=_UNSET):
     # Imported here rather than at module scope: importing torch (via qmlf.qnn)
     # before xgboost segfaults the interpreter on macOS over duplicate libomp.
     import xgboost as xgb
-    from qiskit_machine_learning.algorithms import QSVC
+    from sklearn.svm import SVC
 
     X = np.asarray(X, dtype=float)
 
@@ -329,15 +477,31 @@ def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2):
     xgb_model.fit(X_train, y_train)
     y_pred_xgb = xgb_model.predict(X_test)
 
-    # The ZZ feature map dimension must equal the number of input features,
-    # so the quantum kernel is built over all features (n_qubits is a hint).
+    # The feature map dimension must equal the number of input features, so the
+    # quantum kernel is built over all features (n_qubits is a hint).
     n_features = X.shape[1]
-    quantum_kernel = QuantumKernel(n_qubits=n_features, mode="ZZ", reps=reps)
+    quantum_kernel = QuantumKernel(
+        n_qubits=n_features,
+        mode=mode,
+        reps=reps,
+        bandwidth=bandwidth,
+        normalize=normalize,
+        feature_map=feature_map,
+        entanglement=entanglement
+    )
     quantum_kernel.fit(X_train)
 
-    qsvc = QSVC(quantum_kernel=quantum_kernel.fidelity_quantum_kernel)
-    qsvc.fit(X_train, y_train)
-    y_pred_qsvc = qsvc.predict(X_test)
+    # Routed through compute_kernel_matrix, NOT by handing
+    # .fidelity_quantum_kernel to QSVC. The latter bypasses _prepare, which
+    # silently discards whitening, normalize and bandwidth -- making
+    # mode="covariant" indistinguishable from mode="ZZ" with no error raised.
+    # A precomputed kernel keeps every preprocessing step in the path.
+    kernel_train = quantum_kernel.compute_kernel_matrix(X_train)
+    kernel_test = quantum_kernel.compute_kernel_matrix(X_test, X_train)
+
+    svc = SVC(kernel="precomputed")
+    svc.fit(kernel_train, y_train)
+    y_pred_qsvc = svc.predict(kernel_test)
 
     results = {
         "Model": ["XGBoost", "Quantum SVC"],

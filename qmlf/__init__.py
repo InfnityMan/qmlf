@@ -1,4 +1,4 @@
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 from .ops.q_ops_core import QuantumKernel, run_quantum_benchmark, plot_hilbert_space
 

@@ -60,6 +60,26 @@ Both are available from the CLI too (`--bandwidth`, `--normalize`). To run
 against real hardware or a noisy simulator, pass `fidelity=` or `sampler=`; the
 exact statevector fast path is used automatically only when neither is given.
 
+**Choose the encoding.** The feature map and its entanglement structure are
+hyperparameters, not fixed choices. Entanglement drives the concentration that
+`bandwidth` compensates for, so the two interact:
+
+```python
+QuantumKernel(n_qubits=8, feature_map="zz", entanglement="linear")  # or "full", "circular"
+QuantumKernel(n_qubits=8, feature_map="z")                          # no entanglement, much faster
+QuantumKernel(n_qubits=8, feature_map=my_circuit)                   # any Qiskit QuantumCircuit
+```
+
+On at least one real dataset the unentangled `"z"` map matched or beat `"zz"`
+while running 6-11x faster, so the entangled default is not automatically the
+right choice — sweep it. CLI: `--feature-map`, `--entanglement`.
+
+> **Don't hand `.fidelity_quantum_kernel` to `QSVC`.** Doing so bypasses
+> `_prepare`, silently discarding whitening, `normalize` and `bandwidth` — so
+> `mode="covariant"` becomes indistinguishable from `mode="ZZ"` with no error.
+> Use `compute_kernel_matrix` with `SVC(kernel="precomputed")` instead. Accessing
+> the attribute now warns when it would change your answer.
+
 Drop a trainable quantum layer into a torch model:
 
 ```python

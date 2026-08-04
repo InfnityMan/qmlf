@@ -54,7 +54,12 @@ def _run_benchmark(args):
         y,
         n_qubits=args.n_qubits,
         reps=args.reps,
-        test_size=args.test_size
+        test_size=args.test_size,
+        mode=args.mode,
+        bandwidth=args.bandwidth,
+        normalize=args.normalize,
+        feature_map=args.feature_map,
+        **({} if args.entanglement is None else {"entanglement": args.entanglement})
     )
 
     print(results.to_string(index=False))
@@ -75,7 +80,9 @@ def _run_visualize(args):
         mode=args.mode,
         reps=args.reps,
         bandwidth=args.bandwidth,
-        normalize=args.normalize
+        normalize=args.normalize,
+        feature_map=args.feature_map,
+        **({} if args.entanglement is None else {"entanglement": args.entanglement})
     )
 
     kernel.fit(X)
@@ -110,7 +117,9 @@ def _run_pipeline(args):
         reps=args.reps,
         output_dim=args.output_dim,
         bandwidth=args.bandwidth,
-        normalize=args.normalize
+        normalize=args.normalize,
+        feature_map=args.feature_map,
+        entanglement=args.entanglement
     )
 
     result = pipeline.run(
@@ -166,6 +175,27 @@ def _add_kernel_tuning_arguments(subparser):
         help=(
             "Rescale prepared angles by a train-fitted scale before bandwidth. "
             "Required for covariant/mahalanobis mode to respond to --bandwidth."
+        )
+    )
+
+    subparser.add_argument(
+        "--feature-map",
+        default="zz",
+        choices=["zz", "z"],
+        dest="feature_map",
+        help=(
+            "Encoding circuit. 'z' has no entangling gates and is much faster; "
+            "it is not always worse. Default 'zz'."
+        )
+    )
+
+    subparser.add_argument(
+        "--entanglement",
+        default=None,
+        choices=["full", "linear", "circular"],
+        help=(
+            "Entanglement structure for the 'zz' map. Interacts with "
+            "--bandwidth. No effect with --feature-map z. Default 'full'."
         )
     )
 
@@ -227,6 +257,14 @@ def build_parser():
     )
 
     _add_dataset_arguments(benchmark)
+    _add_kernel_tuning_arguments(benchmark)
+
+    benchmark.add_argument(
+        "--mode",
+        default="ZZ",
+        choices=["ZZ", "covariant", "mahalanobis"],
+        help="Quantum kernel mode ('mahalanobis' is the accurate alias of 'covariant')."
+    )
 
     benchmark.add_argument(
         "--test-size",

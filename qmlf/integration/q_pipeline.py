@@ -35,7 +35,9 @@ class QuantumPipeline:
         output_dim=16,
         *,
         bandwidth=1.0,
-        normalize=None
+        normalize=None,
+        feature_map="zz",
+        entanglement=None
     ):
         self.n_qubits = n_qubits
         self.mode = mode
@@ -43,6 +45,8 @@ class QuantumPipeline:
         self.output_dim = output_dim
         self.bandwidth = bandwidth
         self.normalize = normalize
+        self.feature_map = feature_map
+        self.entanglement = entanglement
 
         self.kernel = None
         self.qnn_layer = None
@@ -59,12 +63,19 @@ class QuantumPipeline:
 
         self.n_qubits = n_qubits
 
+        kernel_kwargs = {}
+
+        if self.entanglement is not None:
+            kernel_kwargs["entanglement"] = self.entanglement
+
         self.kernel = QuantumKernel(
             n_qubits=n_qubits,
             mode=self.mode,
             reps=self.reps,
             bandwidth=self.bandwidth,
-            normalize=self.normalize
+            normalize=self.normalize,
+            feature_map=self.feature_map,
+            **kernel_kwargs
         )
 
         self.qnn_layer = create_advanced_qnn_layer(
@@ -154,7 +165,9 @@ def create_quantum_pipeline(
     output_dim=16,
     *,
     bandwidth=1.0,
-    normalize=None
+    normalize=None,
+    feature_map="zz",
+    entanglement=None
 ):
     return QuantumPipeline(
         n_qubits=n_qubits,
@@ -162,5 +175,7 @@ def create_quantum_pipeline(
         reps=reps,
         output_dim=output_dim,
         bandwidth=bandwidth,
-        normalize=normalize
+        normalize=normalize,
+        feature_map=feature_map,
+        entanglement=entanglement
     )
