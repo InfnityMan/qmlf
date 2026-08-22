@@ -1,5 +1,9 @@
 # Kaggle Benchmarks setup for qmlf
 
+> **The benchmark suite lives in [`benchmark/`](benchmark/BENCHMARK.md)** — 15 private
+> `qmlfb-*` tasks, their research basis, reference sweeps, generator, and a
+> zero-LLM local validator. This file covers the install/sandbox plumbing.
+
 Everything here is verified against the live Kaggle Benchmarks sandbox. See
 [SANDBOX.md](SANDBOX.md) for the measured environment facts.
 

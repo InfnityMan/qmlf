@@ -1,0 +1,137 @@
+{
+  "A2_naive_acc": 0.3,
+  "A2_naive_offdiag": 0.0010439271184152993,
+  "A2_tuned": {
+    "fidelity": [
+      0.9333333333333333,
+      0.12326697329951254,
+      0.02
+    ],
+    "projected": [
+      0.9333333333333333,
+      0.37944181056168036,
+      0.01
+    ]
+  },
+  "A3_scalar_grid": {
+    "0.5": 0.5,
+    "0.25": 0.5,
+    "0.1": 0.5714285714285714,
+    "0.05": 0.5357142857142857,
+    "0.02": 0.6428571428571429,
+    "0.01": 0.5714285714285714
+  },
+  "A3_scalar_best": 0.6428571428571429,
+  "A3_ard": {
+    "inf0.25_ratio0.1": 0.7857142857142857,
+    "inf0.25_ratio0.02": 0.8571428571428571,
+    "inf0.05_ratio0.1": 0.8214285714285714,
+    "inf0.05_ratio0.02": 0.8214285714285714
+  },
+  "A3_ard_best": 0.8571428571428571,
+  "A4": {
+    "zz": [
+      0.92,
+      0.05,
+      40
+    ],
+    "z": [
+      0.96,
+      0.05,
+      0
+    ]
+  },
+  "B1": {
+    "moons": {
+      "n_samples": 80,
+      "geometric_difference": 615.7691085641328,
+      "g_matchable_below": 2.990697562442441,
+      "g_advantage_scale": 8.94427190999916,
+      "classical_rbf_gamma": 0.7086065815463023,
+      "s_classical": 174108.99703147705,
+      "s_quantum": 5674260.574684633,
+      "verdict": "inconclusive: the geometries differ, but not decisively for these labels"
+    },
+    "plain": {
+      "n_samples": 80,
+      "geometric_difference": 306.80690022949074,
+      "g_matchable_below": 2.990697562442441,
+      "g_advantage_scale": 8.94427190999916,
+      "classical_rbf_gamma": 0.03606974286342366,
+      "s_classical": 21916.405755819505,
+      "s_quantum": 118.41032989231071,
+      "verdict": "quantum candidate: large geometric separation AND the labels are easier in the quantum geometry"
+    }
+  },
+  "B2_classical_rbf_acc": 0.8333333333333334,
+  "B2_quantum_auto_acc": 0.8,
+  "C1_n_train": 320,
+  "C1_pairwise": 51040,
+  "C1_m_max": 70,
+  "C1_acc_m70": 0.6375,
+  "C1_acc_m35": 0.5875,
+  "C1_acc_m16": 0.5125,
+  "C1_full_acc": 0.725,
+  "C2_transpiled": {
+    "mode": "transpiled",
+    "original_depth": 40,
+    "optimized_depth": 40,
+    "original_gate_count": 80,
+    "optimized_gate_count": 80,
+    "original_two_qubit_gates": 40,
+    "optimized_two_qubit_gates": 40,
+    "original_fidelity": 0.301194211912202,
+    "optimized_fidelity": 0.301194211912202,
+    "mitigated_fidelity": 0.47589565893415153
+  },
+  "C2_estimate": {
+    "mode": "estimate",
+    "original_depth": 40,
+    "optimized_depth": 16,
+    "original_gate_count": 80,
+    "optimized_gate_count": 80,
+    "original_two_qubit_gates": 40,
+    "optimized_two_qubit_gates": 40,
+    "original_fidelity": 0.301194211912202,
+    "optimized_fidelity": 0.382892885975112,
+    "mitigated_fidelity": 0.537169664481334
+  },
+  "D1_naive_l1": 0.11656000000000007,
+  "D1_readout_only_best_l1": 0.06010939579630842,
+  "D1_pipeline_l1": 0.022510628085544507,
+  "E1_loss_drop_pct": 36.55642411294925,
+  "E1_reproducible": true,
+  "E1_seconds": 94.03862309455872,
+  "E2_exact": -3.2716139792464234,
+  "E2_operator_min": -12.74335518859687,
+  "E2_vqe_zeros": -12.714366057258466,
+  "E2_vqe_zeros_repeat_equal": true,
+  "F1_auto_acc": 0.92,
+  "F1_auto_seconds": 21.117650032043457,
+  "F1_auto_verdict": "healthy",
+  "F1_naive_acc": 0.62,
+  "F1_classical_rbf_acc": 0.98,
+  "F1_projected_acc": 0.88,
+  "F2_naive_r2": -0.019983196151896365,
+  "F2_auto_r2": 0.2405203752448689,
+  "F2_auto_bw": 0.02,
+  "F2_projected_r2": 0.5408218861576068,
+  "F3_correct_acc": 0.95,
+  "F3_bypass_acc": 0.45,
+  "F4_weighted": [
+    0.176596245023419,
+    -0.36337481375400094,
+    -0.46585463095418794,
+    1.1775568302351036,
+    0.07189314096362037,
+    -0.03114176197260185
+  ],
+  "F4_unweighted": [
+    -0.08112544725947908,
+    -0.4825823153421398,
+    -0.6372514808351853,
+    0.3748530035829194,
+    -0.3805183265641226,
+    0.4966663149940643
+  ]
+}

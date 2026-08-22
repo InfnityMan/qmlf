@@ -12,3 +12,9 @@ dist/
 kaggle/results/
 kaggle/qmlf-wheelhouse/*.whl
 *.run.json
+
+# Benchmark answer key: generator with ceiling solutions, stub validators,
+# and the held-out task set. Never belongs on the branch that is pushed to
+# the public repo. Committed only on the private benchmark branch with
+# `git add -f` (see kaggle/benchmark/private/GIT_PLAN.md).
+kaggle/benchmark/private/
