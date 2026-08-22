@@ -1,5 +1,9 @@
 [build-system]
-requires = ["setuptools>=61"]
+# 77, not 61: `license = "Apache-2.0"` below is a PEP 639 SPDX expression, and
+# setuptools only accepts the plain-string form from 77.0 onward. Building with
+# anything older dies with "project.license must be valid exactly by one
+# definition", which is a confusing way to learn your build backend is too old.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,16 +12,35 @@ dynamic = ["version", "readme", "dependencies"]
 description = "A quantum machine learning framework built on Qiskit, PyTorch and scikit-learn."
 authors = [{ name = "InfnityMan" }]
 license = "Apache-2.0"
-requires-python = ">=3.9"
+# 3.10, not 3.9: qiskit >= 2.4 (a hard dependency) itself requires >= 3.10, as
+# do qiskit-machine-learning and xgboost. Claiming 3.9 does not make the package
+# work there -- it makes pip backtrack through old releases of every dependency
+# looking for a combination that fits, then fail with a resolution error that
+# never mentions the Python version.
+requires-python = ">=3.10"
+keywords = [
+    "quantum-computing",
+    "quantum-machine-learning",
+    "qiskit",
+    "pytorch",
+    "quantum-kernel"
+]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
     "Intended Audience :: Science/Research"
 ]
 
 [project.urls]
 Homepage = "https://github.com/InfnityMan/qmlf"
+Source = "https://github.com/InfnityMan/qmlf"
+Issues = "https://github.com/InfnityMan/qmlf/issues"
 
 [project.scripts]
 qmlf = "qmlf.cli:main"

@@ -35,12 +35,38 @@ class AdvancedIBIInitializer:
 
 
 class AdvancedQuantumNNLayer(nn.Module):
-    def __init__(self, n_qubits=8, reps=5, output_dim=16):
+    """Variational quantum layer with a classical read-out head.
+
+    Precision
+    ---------
+    ``precision`` is the sampling precision of the underlying ``EstimatorQNN``.
+
+    - ``0.0`` (default) evaluates the observables **exactly** from the
+      statevector. Repeated forward passes on the same input return the same
+      value, which is what a seeded experiment or an assertion needs.
+    - A positive value samples the expectation instead, emulating a finite-shot
+      device: the read-out picks up Gaussian noise of roughly that scale and no
+      two forward passes agree.
+
+    qiskit-machine-learning defaults this to ``0.015625``, which is why earlier
+    releases returned noisy read-outs whether or not that was wanted -- on a
+    circuit whose exact expectation value was 0.032, five successive calls
+    spanned 0.037. That behaviour is still available, but it is now something
+    you ask for rather than the silent default:
+
+        create_advanced_qnn_layer(precision=0.015625)   # pre-1.2.1 behaviour
+    """
+
+    def __init__(self, n_qubits=8, reps=5, output_dim=16, *, precision=0.0):
         super().__init__()
+
+        if precision < 0:
+            raise ValueError(f"precision must be non-negative, got {precision}")
 
         self.n_qubits = n_qubits
         self.reps = reps
         self.output_dim = output_dim
+        self.precision = precision
 
         self.feature_map = zz_feature_map(feature_dimension=n_qubits, reps=1)
         self.ansatz = real_amplitudes(num_qubits=n_qubits, reps=reps)
@@ -60,7 +86,8 @@ class AdvancedQuantumNNLayer(nn.Module):
             observables=self.observables,
             estimator=self.estimator,
             gradient=self.gradient,
-            input_gradients=True
+            input_gradients=True,
+            default_precision=self.precision
         )
 
         self.initial_weights = AdvancedIBIInitializer(
@@ -93,6 +120,13 @@ class AdvancedQuantumNNLayer(nn.Module):
         return observables
 
     def forward(self, x):
+        if x.dim() != 2:
+            raise ValueError(
+                f"Expected a 2D (batch, n_qubits) tensor, got a {x.dim()}D "
+                f"tensor of shape {tuple(x.shape)}. For a single sample use "
+                "x.unsqueeze(0)."
+            )
+
         if x.shape[1] != self.n_qubits:
             raise ValueError(
                 f"Expected input with {self.n_qubits} features, got {x.shape[1]}"
@@ -102,5 +136,5 @@ class AdvancedQuantumNNLayer(nn.Module):
         return self.classical_head(quantum_out)
 
 
-def create_advanced_qnn_layer(n_qubits=8, reps=5, output_dim=16):
-    return AdvancedQuantumNNLayer(n_qubits, reps, output_dim)
+def create_advanced_qnn_layer(n_qubits=8, reps=5, output_dim=16, *, precision=0.0):
+    return AdvancedQuantumNNLayer(n_qubits, reps, output_dim, precision=precision)

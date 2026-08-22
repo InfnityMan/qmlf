@@ -108,6 +108,18 @@ class QMLFPipeline(nn.Module):
                 dtype=torch.float32
             )
 
+        if x_tensor.dim() != 2:
+            raise ValueError(
+                f"Expected 2D (batch, input_dim) input, got a "
+                f"{x_tensor.dim()}D tensor of shape {tuple(x_tensor.shape)}"
+            )
+
+        if x_tensor.shape[-1] != self.input_dim:
+            raise ValueError(
+                f"Expected input_dim={self.input_dim} features, got "
+                f"{x_tensor.shape[-1]}"
+            )
+
         encoded = self.input_projection(
             x_tensor
         )

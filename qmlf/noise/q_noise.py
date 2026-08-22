@@ -1,12 +1,45 @@
+import warnings
+
 import numpy as np
+
+_VALID_STRATEGIES = ("readout", "depolarizing", "zne")
 
 
 class AdvancedNoiseMitigator:
+    """Readout, depolarizing and zero-noise-extrapolation mitigation.
+
+    ``strategy`` selects the method and is validated at construction: an
+    unrecognised value now raises instead of silently returning the input
+    unmitigated, which made a mis-cased ``"ZNE"`` indistinguishable from a
+    successful mitigation.
+
+    Input shapes differ by strategy, because the strategies need different data:
+
+    - ``readout`` / ``depolarizing`` mitigate a single distribution. They accept
+      a 1D ``(n_states,)`` vector or a 2D ``(n_rows, n_states)`` stack.
+    - ``zne`` extrapolates *across noise scales*, so it needs at least two
+      measurements: a 2D ``(n_scales, n_states)`` stack whose rows are the
+      distributions observed at increasing noise. A 1D input is an error rather
+      than something to guess at.
+    """
+
     def __init__(
         self,
         noise_level=0.015,
         strategy="readout"
     ):
+        if strategy not in _VALID_STRATEGIES:
+            raise ValueError(
+                f"Unknown strategy: {strategy!r} (expected one of "
+                f"{_VALID_STRATEGIES}). Note these are lower-case."
+            )
+
+        if not 0.0 <= noise_level < 1.0:
+            raise ValueError(
+                f"noise_level must be in [0, 1), got {noise_level}. The "
+                "depolarizing inverse divides by (1 - noise_level)."
+            )
+
         self.noise_level = noise_level
         self.strategy = strategy
 
@@ -31,6 +64,15 @@ class AdvancedNoiseMitigator:
 
     def _readout_mitigation(self, probabilities):
         if self.inverse_calibration_matrix is None:
+            # Returning the input unchanged looks exactly like a successful
+            # mitigation from the caller's side, so say what happened.
+            warnings.warn(
+                "readout mitigation was requested but no calibration matrix "
+                "has been fitted, so the input is being returned unmitigated. "
+                "Call .fit(confusion_matrix) first.",
+                UserWarning,
+                stacklevel=3
+            )
             return probabilities
 
         mitigated = (
@@ -137,9 +179,29 @@ class AdvancedNoiseMitigator:
         With only a single row there is nothing to extrapolate from, so the
         input is returned unchanged rather than faking a result.
         """
+        if probabilities.ndim != 2:
+            # A 1D vector here used to be read as one measurement per *noise
+            # scale* rather than one per state: mitigate([0.7, 0.3]) fitted a
+            # polynomial through the two probabilities and returned the scalar
+            # 1.0, with no error.
+            raise ValueError(
+                f"zne needs a 2D (n_scales, n_states) array whose rows are the "
+                f"distributions measured at increasing noise, got a "
+                f"{probabilities.ndim}D array of shape {probabilities.shape}. "
+                "To mitigate a single distribution use strategy='readout' or "
+                "strategy='depolarizing'."
+            )
+
         n_scales = probabilities.shape[0]
 
         if n_scales < 2:
+            warnings.warn(
+                "zne received a single noise scale, so there is nothing to "
+                "extrapolate from and the input is returned unchanged. Pass "
+                "measurements at two or more scales.",
+                UserWarning,
+                stacklevel=3
+            )
             return probabilities
 
         if self.scale_factors is None:
@@ -183,13 +245,10 @@ class AdvancedNoiseMitigator:
                 probabilities
             )
 
-        elif self.strategy == "zne":
+        else:
             mitigated = self._zne_mitigation(
                 probabilities
             )
-
-        else:
-            mitigated = probabilities
 
         return mitigated
 
@@ -205,17 +264,25 @@ class AdvancedNoiseMitigator:
         comes from the data, not from ``noise_level``.
 
         If ``calibration_data`` is not 2D or not square the mitigator is left
-        unchanged (both matrices stay ``None``).
+        unchanged (both matrices stay ``None``) -- and now says so, because a
+        silently skipped fit() looks identical to a successful one right up
+        until mitigate() passes data through unmitigated.
         """
         calibration_data = np.asarray(
             calibration_data,
             dtype=float
         )
 
-        if calibration_data.ndim != 2:
-            return self
-
-        if calibration_data.shape[0] != calibration_data.shape[1]:
+        if (calibration_data.ndim != 2
+                or calibration_data.shape[0] != calibration_data.shape[1]):
+            warnings.warn(
+                f"fit() expected a square (n_states, n_states) confusion "
+                f"matrix, got shape {calibration_data.shape}; no calibration "
+                "was stored and readout mitigation will pass data through "
+                "unchanged.",
+                UserWarning,
+                stacklevel=2
+            )
             return self
 
         calibration = self._normalize(calibration_data)

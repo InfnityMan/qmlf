@@ -1,6 +1,32 @@
-__version__ = "1.2.0"
+__version__ = "1.4.0"
+
+import os
+
+# Torch, scikit-learn and xgboost each vendor their own OpenMP runtime. Once
+# more than one thread pool spins up in a single process the interpreter can
+# die with SIGSEGV and no traceback -- `import torch` followed by
+# run_quantum_benchmark() reproduced this every time on macOS/arm64.
+# KMP_DUPLICATE_LIB_OK does not help; capping to a single thread does.
+#
+# This has to run before any submodule import, which is why it lives here and
+# not in integration/q_pipeline.py, where it only ever protected the CLI (which
+# imports that module) and left the documented Python API exposed.
+# setdefault, so an OMP_NUM_THREADS the caller already chose is left alone.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 from .ops.q_ops_core import QuantumKernel, run_quantum_benchmark, plot_hilbert_space
+from .models.q_models import (
+    QuantumClassifier,
+    QuantumRegressor,
+    create_quantum_classifier,
+    create_quantum_regressor,
+    kernel_diagnostics,
+)
+from .analysis.q_advantage import (
+    geometric_difference,
+    model_complexity,
+    quantum_advantage_report,
+)
 
 # Everything below is resolved lazily (PEP 562). The QNN, hybrid, transformer,
 # chemistry and pipeline modules all import torch, and pulling torch in just to
@@ -39,6 +65,14 @@ _LAZY_ATTRS = {
 }
 
 __all__ = [
+    "QuantumClassifier",
+    "QuantumRegressor",
+    "create_quantum_regressor",
+    "geometric_difference",
+    "model_complexity",
+    "quantum_advantage_report",
+    "kernel_diagnostics",
+    "create_quantum_classifier",
     "QuantumKernel",
     "run_quantum_benchmark",
     "plot_hilbert_space",

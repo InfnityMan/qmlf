@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 
 
@@ -7,6 +9,12 @@ class FederatedQML:
     Aggregates per-client parameter vectors into a single global vector using a
     sample-size-weighted mean (the standard FedAvg update), and supports
     repeated aggregation rounds.
+
+    ``num_clients`` is the expected cohort size and does not constrain
+    :meth:`aggregate`, which averages however many vectors it is handed --
+    partial participation is normal in FedAvg. A mismatch warns, since silently
+    averaging two clients when five were expected is usually a bug in the
+    caller's collection step rather than an intentional round.
     """
 
     def __init__(
@@ -34,6 +42,17 @@ class FederatedQML:
             )
 
         num_reporting = client_params.shape[0]
+
+        if num_reporting != self.num_clients:
+            warnings.warn(
+                f"aggregating {num_reporting} client vectors but "
+                f"num_clients={self.num_clients}. Averaging the "
+                f"{num_reporting} that reported; pass "
+                f"num_clients={num_reporting} if partial participation is "
+                "intended.",
+                UserWarning,
+                stacklevel=2
+            )
 
         if client_weights is None:
             weights = np.ones(num_reporting)

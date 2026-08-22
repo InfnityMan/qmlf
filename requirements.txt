@@ -1,9 +1,14 @@
-numpy>=1.23
-pandas>=1.5
-scikit-learn>=1.2
-plotly>=5.0
-xgboost>=2.0
-torch>=2.0
-qiskit>=2.4
-qiskit-machine-learning>=0.9
-qiskit-algorithms>=0.4
+# Lower bounds are the oldest versions actually exercised by the test suite;
+# upper bounds stop the next major release of a dependency from silently
+# changing published numbers (kernel values feed benchmark thresholds).
+# Verified stacks: qiskit 2.3.1/2.5.2, torch 2.8/2.13, numpy 2.3/2.5,
+# pandas 2.3/3.0, scikit-learn 1.8/1.9, xgboost 3.2/3.4, plotly 6.7/6.9.
+numpy>=1.23,<3
+pandas>=1.5,<4
+scikit-learn>=1.2,<2
+plotly>=5.0,<7
+xgboost>=2.0,<4
+torch>=2.0,<3
+qiskit>=2.3,<3
+qiskit-machine-learning>=0.9,<1
+qiskit-algorithms>=0.4,<1

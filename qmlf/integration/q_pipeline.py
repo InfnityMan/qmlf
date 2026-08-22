@@ -1,12 +1,3 @@
-import os
-
-# Qiskit's fidelity kernel and Torch's QNN forward pass each bring in their own
-# OpenMP runtime; running both back to back in one process can crash on some
-# platforms once more than one thread pool spins up. Capping to a single
-# thread here (only if the caller hasn't already set one) sidesteps that
-# without touching anyone else's OpenMP configuration.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-
 import numpy as np
 import torch
 
@@ -124,8 +115,19 @@ class QuantumPipeline:
             dtype=torch.float32
         )
 
-        with torch.no_grad():
-            qnn_out = self.qnn_layer(x_tensor)
+        # torch.no_grad() turns off autograd, NOT dropout: the QNN's classical
+        # head carries nn.Dropout and every nn.Module starts in training mode,
+        # so without .eval() this read-out is randomly masked and two run()
+        # calls on identical data disagree. The previous mode is restored so a
+        # layer the caller is mid-training is handed back untouched.
+        was_training = self.qnn_layer.training
+        self.qnn_layer.eval()
+
+        try:
+            with torch.no_grad():
+                qnn_out = self.qnn_layer(x_tensor)
+        finally:
+            self.qnn_layer.train(was_training)
 
         self.qnn_output_ = (
             qnn_out

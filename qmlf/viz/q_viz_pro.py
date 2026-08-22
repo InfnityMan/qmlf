@@ -937,29 +937,37 @@ class QVizPro:
         return QVizPro._show_fig(fig, show, save_path)
 
 
-def plot_hilbert_space(kernel_matrix, labels=None):
-    return QVizPro.plot_hilbert_space(kernel_matrix, labels)
+def plot_hilbert_space(kernel_matrix, labels=None, **kwargs):
+    # Forwards method, perplexity, show, save_path and friends instead of
+    # silently dropping them; the bare two-argument call is unchanged.
+    return QVizPro.plot_hilbert_space(kernel_matrix, labels, **kwargs)
 
 
-def gradient_heatmap(gradients, title="Gradient Magnitude Across Parameters"):
-    return QVizPro.gradient_heatmap(gradients, title)
+def gradient_heatmap(gradients, title="Gradient Magnitude Across Parameters", **kwargs):
+    # Forwards show_values, show, save_path instead of silently dropping them;
+    # the bare two-argument call is unchanged.
+    return QVizPro.gradient_heatmap(gradients, title, **kwargs)
 
 
 def plot_bloch_sphere(
     state_vectors=None,
-    title="Quantum States on Bloch Sphere"
+    title="Quantum States on Bloch Sphere",
+    **kwargs
 ):
     return QVizPro.plot_bloch_sphere(
         state_vectors=state_vectors,
-        title=title
+        title=title,
+        **kwargs
     )
 
 
 def plot_parameter_landscape(
     loss_values,
-    title="Loss Landscape in Parameter Space"
+    title="Loss Landscape in Parameter Space",
+    **kwargs
 ):
     return QVizPro.plot_parameter_landscape(
         loss_values,
-        title=title
+        title=title,
+        **kwargs
     )

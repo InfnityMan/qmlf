@@ -292,9 +292,11 @@ def test_run_quantum_benchmark_respects_mode():
                                              [0.0, 0.0, 0.6]])
     y = (X[:, 0] + 0.5 * rng.normal(size=40) > 0).astype(int)
 
-    zz = run_quantum_benchmark(X, y, reps=1, bandwidth=0.3)
+    # n_qubits passed explicitly: it must match the data width, and a
+    # mismatch now warns instead of being silently ignored.
+    zz = run_quantum_benchmark(X, y, n_qubits=3, reps=1, bandwidth=0.3)
     with pytest.warns(UserWarning):
-        cov = run_quantum_benchmark(X, y, reps=1, bandwidth=0.3, mode="covariant")
+        cov = run_quantum_benchmark(X, y, n_qubits=3, reps=1, bandwidth=0.3, mode="covariant")
 
     zz_acc = zz.loc[zz["Model"] == "Quantum SVC", "Accuracy"].iloc[0]
     cov_acc = cov.loc[cov["Model"] == "Quantum SVC", "Accuracy"].iloc[0]
@@ -305,6 +307,6 @@ def test_run_quantum_benchmark_respects_bandwidth():
     rng = np.random.default_rng(4)
     X = rng.normal(size=(40, 3))
     y = (X[:, 0] > 0).astype(int)
-    wide = run_quantum_benchmark(X, y, reps=1, bandwidth=1.0)
-    narrow = run_quantum_benchmark(X, y, reps=1, bandwidth=0.05)
+    wide = run_quantum_benchmark(X, y, n_qubits=3, reps=1, bandwidth=1.0)
+    narrow = run_quantum_benchmark(X, y, n_qubits=3, reps=1, bandwidth=0.05)
     assert not wide.equals(narrow), "bandwidth is being discarded again"

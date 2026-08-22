@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 
 from qiskit.circuit.library import real_amplitudes
@@ -17,6 +19,10 @@ class AdvancedQuantumChemistryLayer:
     systems. ``basis`` is accepted for API compatibility and is reserved for a
     future electronic-structure backend: the V1 uses a model spin Hamiltonian,
     not a full electronic-structure calculation.
+
+    ``num_atoms`` is likewise declarative -- every method sizes itself from the
+    ``coordinates`` array it is given. A geometry whose atom count disagrees
+    with it warns, because that usually means the wrong array was passed.
     """
 
     def __init__(
@@ -40,7 +46,22 @@ class AdvancedQuantumChemistryLayer:
             dtype=float
         )
 
+        if coordinates.ndim != 2:
+            raise ValueError(
+                f"coordinates must be 2D (n_atoms, n_dims), got a "
+                f"{coordinates.ndim}D array of shape {coordinates.shape}"
+            )
+
         n_atoms = coordinates.shape[0]
+
+        if n_atoms != self.num_atoms:
+            warnings.warn(
+                f"geometry has {n_atoms} atoms but num_atoms="
+                f"{self.num_atoms}. Sizing from the geometry; num_atoms is "
+                "declarative and does not reshape the input.",
+                UserWarning,
+                stacklevel=3
+            )
 
         distances = np.zeros(
             (n_atoms, n_atoms)
@@ -224,7 +245,8 @@ class AdvancedQuantumChemistryLayer:
     def compute_vqe_energy(
         self,
         coordinates,
-        charges=None
+        charges=None,
+        initial_point=None
     ):
         """Estimate the ground-state energy with a real VQE.
 
@@ -232,6 +254,12 @@ class AdvancedQuantumChemistryLayer:
         COBYLA over a statevector Estimator) on a geometry-derived model spin
         Hamiltonian (one qubit per atom). Practical only for small systems; for
         routine use prefer ``compute_ground_state_energy``.
+
+        ``initial_point`` seeds the ansatz parameters. Left as ``None`` (the
+        historical behaviour) qiskit draws a random starting point, so two calls
+        on the same molecule return different energies. Pass a fixed vector --
+        ``np.zeros(ansatz.num_parameters)`` is a reasonable choice -- whenever
+        the result needs to be reproducible.
         """
         hamiltonian = self._hamiltonian_operator(
             coordinates,
@@ -252,7 +280,8 @@ class AdvancedQuantumChemistryLayer:
         vqe = VQE(
             StatevectorEstimator(),
             ansatz,
-            optimizer
+            optimizer,
+            initial_point=initial_point
         )
 
         result = vqe.compute_minimum_eigenvalue(

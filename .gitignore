@@ -4,3 +4,11 @@ __pycache__/
 build/
 dist/
 .DS_Store
+.pytest_cache/
+.idea/
+
+# Kaggle benchmark working artifacts: downloaded run output and the binary
+# wheelhouse payload (73MB of wheels; rebuild command lives in kaggle/README.md)
+kaggle/results/
+kaggle/qmlf-wheelhouse/*.whl
+*.run.json

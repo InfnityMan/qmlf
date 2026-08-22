@@ -138,6 +138,17 @@ class AdvancedQuantumGraphKernel(
 
         self.X_train_ = X_np
 
+        # include_self=True counts the sample itself as one of its neighbours,
+        # so the ceiling is n_samples, not n_samples - 1. Checked here because
+        # sklearn's own error surfaces from inside kneighbors and does not name
+        # the constructor argument that caused it.
+        if self.n_neighbors > X_np.shape[0]:
+            raise ValueError(
+                f"n_neighbors={self.n_neighbors} but X has only "
+                f"{X_np.shape[0]} samples; the kNN graph needs "
+                f"n_neighbors <= n_samples (self-loops included)."
+            )
+
         if self.use_quantum:
             n_components = min(self.n_qubits, X_np.shape[1])
 

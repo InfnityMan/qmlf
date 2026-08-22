@@ -17,19 +17,34 @@ from qiskit_algorithms.gradients import (
 
 
 class AdvancedHybridLayer(nn.Module):
+    """Classical encoder -> variational quantum layer -> classical decoder.
+
+    ``precision`` is the sampling precision of the underlying ``EstimatorQNN``:
+    ``0.0`` (default) reads the observables exactly off the statevector and is
+    reproducible; a positive value emulates a finite-shot device and makes every
+    forward pass differ. See :class:`~qmlf.qnn.qnn_layers.AdvancedQuantumNNLayer`
+    for the full note.
+    """
+
     def __init__(
         self,
         input_dim=24,
         n_qubits=8,
         reps=4,
-        output_dim=32
+        output_dim=32,
+        *,
+        precision=0.0
     ):
         super().__init__()
+
+        if precision < 0:
+            raise ValueError(f"precision must be non-negative, got {precision}")
 
         self.input_dim = input_dim
         self.n_qubits = n_qubits
         self.reps = reps
         self.output_dim = output_dim
+        self.precision = precision
 
         self.preprocessor = nn.Sequential(
             nn.Linear(input_dim, 48),
@@ -70,7 +85,8 @@ class AdvancedHybridLayer(nn.Module):
             observables=self.observables,
             estimator=self.estimator,
             gradient=self.gradient,
-            input_gradients=True
+            input_gradients=True,
+            default_precision=self.precision
         )
 
         initial_weights = np.random.normal(
@@ -107,6 +123,18 @@ class AdvancedHybridLayer(nn.Module):
         return observables
 
     def forward(self, x):
+        if x.dim() != 2:
+            raise ValueError(
+                f"Expected a 2D (batch, input_dim) tensor, got a {x.dim()}D "
+                f"tensor of shape {tuple(x.shape)}"
+            )
+
+        if x.shape[-1] != self.input_dim:
+            raise ValueError(
+                f"Expected input_dim={self.input_dim} features, got "
+                f"{x.shape[-1]}"
+            )
+
         encoded = self.preprocessor(x)
 
         quantum_output = self.quantum_layer(
@@ -131,11 +159,14 @@ def create_advanced_hybrid_layer(
     input_dim=24,
     n_qubits=8,
     reps=4,
-    output_dim=32
+    output_dim=32,
+    *,
+    precision=0.0
 ):
     return AdvancedHybridLayer(
         input_dim=input_dim,
         n_qubits=n_qubits,
         reps=reps,
-        output_dim=output_dim
+        output_dim=output_dim,
+        precision=precision
     )
