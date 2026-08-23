@@ -56,8 +56,9 @@ PROMPT = """\\
 You are given a binary classification dataset with 10 continuous features
 (90 training rows, 30 test rows). Encode ALL 10 features on 10 qubits -- do
 not reduce dimensionality. Using the `qmlf` library (already installed; key
-API: qmlf.QuantumClassifier with parameters kernel, mode, feature_map,
-bandwidth, max_qubits; .fit/.predict/.diagnose()), write a Python function
+API: qmlf.QuantumClassifier with parameters kernel ('fidelity'|'projected'),
+mode ('ZZ'|'mahalanobis'|'fisher', the preprocessing), feature_map ('zz'|'z'),
+bandwidth ('auto'|'median'|a number), max_qubits; .fit/.predict/.diagnose()), write a Python function
 
     def solve(X_train, y_train, X_test):
         ...
@@ -334,8 +335,10 @@ classical baseline next to every quantum model, honest performance
 estimates, and a verdict that follows from them.
 
 Dataset: 6 features, binary labels, 90 train / 30 test. `qmlf` is installed
-(qmlf.QuantumClassifier() auto-tunes a quantum fidelity kernel SVM and
-exposes its CV table in .cv_results_). sklearn is available for the baseline.
+(qmlf.QuantumClassifier() auto-tunes a quantum fidelity kernel SVM; after fit
+its CV sweep is the dict .cv_results_ with lists under 'bandwidth' and
+'mean_cv_accuracy'). sklearn is available for the baseline. Return predictions
+as integer class labels.
 
 Write:
 

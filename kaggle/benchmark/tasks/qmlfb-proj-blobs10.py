@@ -12,7 +12,7 @@ import os
 import sys
 
 
-def _ensure_qmlf(with_torch=False):
+def _ensure_qmlf(with_torch=False, with_plotly=False):
     """Install qmlf + runtime deps in the Kaggle Benchmarks sandbox.
 
     Measured facts (kaggle/SANDBOX.md): Python 3.11, internet on, only
@@ -53,6 +53,14 @@ def _ensure_qmlf(with_torch=False):
         except ImportError:
             pip("torch", "--index-url", "https://download.pytorch.org/whl/cpu")
 
+    if with_plotly:
+        # qmlf imports plotly lazily, only inside the viz module; the sandbox
+        # does not ship it. Measured: the whole viz family failed on import.
+        try:
+            import plotly  # noqa: F401
+        except ImportError:
+            pip("plotly>=5,<7")
+
     import qmlf
     return qmlf
 
@@ -80,6 +88,17 @@ def _run_model_function(source, entry, args, timeout=900):
 
     namespace = {"__name__": "__model__"}
 
+    # Pre-seed the modules the prompts name directly. The prompts say "`qmlf`
+    # is installed" and refer to qmlf.* / np.* by name, so a model whose QML
+    # logic is correct must not fail merely for omitting an import line: that
+    # would measure sandbox-semantics guessing, not quantum-ML competence.
+    # Models that write their own imports are unaffected.
+    for alias, module_name in (("qmlf", "qmlf"), ("np", "numpy"), ("numpy", "numpy")):
+        try:
+            namespace[alias] = __import__(module_name)
+        except ImportError:
+            pass
+
     try:
         signal.signal(signal.SIGALRM, _alarm)
         signal.alarm(timeout)
@@ -96,12 +115,31 @@ def _run_model_function(source, entry, args, timeout=900):
 
 
 def _jsonable(obj):
-    """Recursively convert numpy scalars/arrays/bools to plain Python.
+    """Recursively convert numpy scalars/arrays/bools to plain, storable Python.
 
-    kbench serialises the task's return value to JSON; a numpy.bool_ (which
-    json.dumps rejects with "Object of type bool is not JSON serializable")
-    silently produces 'notebook completed but no run output'. Measured, not
-    guessed: two tasks died exactly this way."""
+    Two distinct storage failures are handled here, both measured rather than
+    guessed:
+
+    1. numpy.bool_ -- kbench serialises the task's return value to JSON, and
+       json.dumps rejects it with "Object of type bool is not JSON
+       serializable", which surfaces only as 'notebook completed but no run
+       output'. Two tasks died exactly this way.
+
+    2. inf / -inf / nan -- Kaggle stores the metrics dict as a protobuf Struct,
+       whose Value.number_value cannot hold a non-finite float. The run is
+       rejected server-side with "Failed to store run: Fail to serialize
+       Infinity for Value.number_value" and its status is left as Unspecified.
+
+    (2) is the more damaging of the two, because float("inf") is the standard
+    failure sentinel in these graders: a model whose code raised would score
+    inf, fail its assertions, and then have the entire run discarded instead of
+    recorded as a failure. That silently biases the benchmark toward whatever
+    the model happened to succeed at. Mapping non-finite to None keeps the run
+    storable, so the failure is recorded as a failure. The assertion messages
+    still carry the human-readable "inf".
+    """
+    import math
+
     import numpy as np
 
     if isinstance(obj, dict):
@@ -111,7 +149,10 @@ def _jsonable(obj):
     if isinstance(obj, np.ndarray):
         return _jsonable(obj.tolist())
     if isinstance(obj, np.generic):
-        return obj.item()
+        obj = obj.item()
+    # bool is a subclass of int, not float, so it is unaffected by this.
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
     return obj
 
 
@@ -416,7 +457,7 @@ PARAMS = {'kind': 'blobs', 'n_features': 10}
 
 
 PROMPT = """\
-Binary classification with 10 continuous features. Encode ALL features on 10 qubits -- do not reduce dimensionality (qmlf.QuantumClassifier(..., max_qubits=None)). `qmlf` is installed; QuantumClassifier parameters include kernel ('fidelity'|'projected'), mode, feature_map, bandwidth, max_qubits; methods fit/predict/diagnose(). Write
+Binary classification with 10 continuous features. Encode ALL features on 10 qubits -- do not reduce dimensionality (qmlf.QuantumClassifier(..., max_qubits=None)). `qmlf` is installed; QuantumClassifier parameters: kernel ('fidelity'|'projected'), mode ('ZZ'|'mahalanobis'|'fisher' -- the preprocessing, default 'ZZ'), feature_map ('zz'|'z'), bandwidth ('auto'|'median'|a number), max_qubits; methods fit/predict/diagnose(). Write
     def solve(X_train, y_train, X_test):
         return {"predictions": <test predictions>, "classifier": <the fitted qmlf.QuantumClassifier>}
 Scoring: accuracy >= 0.72 AND clf.diagnose()["offdiag_mean"] >= 0.10. At this qubit count a global fidelity kernel with default settings collapses toward the identity (Thanasilp et al. 2024); think about which kernel family survives. Return only one ```python code block.\

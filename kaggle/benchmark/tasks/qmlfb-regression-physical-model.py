@@ -15,7 +15,7 @@ import os
 import sys
 
 
-def _ensure_qmlf(with_torch=False):
+def _ensure_qmlf(with_torch=False, with_plotly=False):
     """Install qmlf + runtime deps in the Kaggle Benchmarks sandbox.
 
     Measured facts (kaggle/SANDBOX.md): Python 3.11, internet on, only
@@ -56,6 +56,14 @@ def _ensure_qmlf(with_torch=False):
         except ImportError:
             pip("torch", "--index-url", "https://download.pytorch.org/whl/cpu")
 
+    if with_plotly:
+        # qmlf imports plotly lazily, only inside the viz module; the sandbox
+        # does not ship it. Measured: the whole viz family failed on import.
+        try:
+            import plotly  # noqa: F401
+        except ImportError:
+            pip("plotly>=5,<7")
+
     import qmlf
     return qmlf
 
@@ -83,6 +91,17 @@ def _run_model_function(source, entry, args, timeout=900):
 
     namespace = {"__name__": "__model__"}
 
+    # Pre-seed the modules the prompts name directly. The prompts say "`qmlf`
+    # is installed" and refer to qmlf.* / np.* by name, so a model whose QML
+    # logic is correct must not fail merely for omitting an import line: that
+    # would measure sandbox-semantics guessing, not quantum-ML competence.
+    # Models that write their own imports are unaffected.
+    for alias, module_name in (("qmlf", "qmlf"), ("np", "numpy"), ("numpy", "numpy")):
+        try:
+            namespace[alias] = __import__(module_name)
+        except ImportError:
+            pass
+
     try:
         signal.signal(signal.SIGALRM, _alarm)
         signal.alarm(timeout)
@@ -99,12 +118,31 @@ def _run_model_function(source, entry, args, timeout=900):
 
 
 def _jsonable(obj):
-    """Recursively convert numpy scalars/arrays/bools to plain Python.
+    """Recursively convert numpy scalars/arrays/bools to plain, storable Python.
 
-    kbench serialises the task's return value to JSON; a numpy.bool_ (which
-    json.dumps rejects with "Object of type bool is not JSON serializable")
-    silently produces 'notebook completed but no run output'. Measured, not
-    guessed: two tasks died exactly this way."""
+    Two distinct storage failures are handled here, both measured rather than
+    guessed:
+
+    1. numpy.bool_ -- kbench serialises the task's return value to JSON, and
+       json.dumps rejects it with "Object of type bool is not JSON
+       serializable", which surfaces only as 'notebook completed but no run
+       output'. Two tasks died exactly this way.
+
+    2. inf / -inf / nan -- Kaggle stores the metrics dict as a protobuf Struct,
+       whose Value.number_value cannot hold a non-finite float. The run is
+       rejected server-side with "Failed to store run: Fail to serialize
+       Infinity for Value.number_value" and its status is left as Unspecified.
+
+    (2) is the more damaging of the two, because float("inf") is the standard
+    failure sentinel in these graders: a model whose code raised would score
+    inf, fail its assertions, and then have the entire run discarded instead of
+    recorded as a failure. That silently biases the benchmark toward whatever
+    the model happened to succeed at. Mapping non-finite to None keeps the run
+    storable, so the failure is recorded as a failure. The assertion messages
+    still carry the human-readable "inf".
+    """
+    import math
+
     import numpy as np
 
     if isinstance(obj, dict):
@@ -114,7 +152,10 @@ def _jsonable(obj):
     if isinstance(obj, np.ndarray):
         return _jsonable(obj.tolist())
     if isinstance(obj, np.generic):
-        return obj.item()
+        obj = obj.item()
+    # bool is a subclass of int, not float, so it is unaffected by this.
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
     return obj
 
 
@@ -276,6 +317,140 @@ def data_debug():
     X, y = make_classification(n_samples=80, n_features=5, n_informative=3,
                                n_redundant=0, class_sep=1.4, random_state=29)
     return _split(X, y)
+
+
+# ---- parametric makers (suite families) ------------------------------------
+
+def make_dataset(kind, n_samples=100, n_features=6, seed=0, class_sep=1.4,
+                 n_informative=None, noise_features=0, noise_scale=2.0):
+    """Deterministic classification data. Returns X_train, X_test, y_train, y_test.
+
+    kinds: 'blobs' (make_classification), 'moons', 'circles', 'xor',
+    'shift' (explicit class-conditional shifts, each feature individually
+    informative), 'quantiles' (gaussian_quantiles, concentric).
+    """
+    import numpy as np
+    from sklearn import datasets as skd
+
+    rng = np.random.default_rng(seed)
+    if kind == "blobs":
+        inf = n_informative or max(2, n_features // 2)
+        X, y = skd.make_classification(n_samples=n_samples, n_features=n_features,
+                                       n_informative=inf, n_redundant=0,
+                                       class_sep=class_sep, random_state=seed)
+    elif kind == "moons":
+        X2, y = skd.make_moons(n_samples=n_samples, noise=0.12, random_state=seed)
+        X = np.hstack([X2, rng.normal(scale=0.3, size=(n_samples, max(0, n_features - 2)))])
+    elif kind == "circles":
+        X2, y = skd.make_circles(n_samples=n_samples, noise=0.08, factor=0.45, random_state=seed)
+        X = np.hstack([X2, rng.normal(scale=0.3, size=(n_samples, max(0, n_features - 2)))])
+    elif kind == "xor":
+        X = rng.uniform(-1, 1, size=(n_samples, n_features))
+        y = ((X[:, 0] > 0) ^ (X[:, 1] > 0)).astype(int)
+    elif kind == "shift":
+        y = rng.integers(0, 2, n_samples)
+        inf = n_informative or n_features
+        shift = 0.9 + 0.3 * rng.random(inf)
+        X = rng.normal(size=(n_samples, inf)) + np.outer(y, shift)
+        if inf > 1:
+            X[:, 1] = X[:, 1] * (1 + 0.3 * X[:, 0])
+        if n_features > inf:
+            X = np.hstack([X, rng.normal(scale=noise_scale, size=(n_samples, n_features - inf))])
+    elif kind == "quantiles":
+        X, y = skd.make_gaussian_quantiles(n_samples=n_samples, n_features=n_features,
+                                           n_classes=2, random_state=seed)
+    else:
+        raise ValueError(kind)
+
+    if noise_features:
+        X = np.hstack([X, rng.normal(scale=noise_scale, size=(n_samples, noise_features))])
+
+    return _split(np.asarray(X, dtype=float), np.asarray(y), test_size=0.25, seed=7)
+
+
+def make_regression(kind, n_samples=90, n_features=8, seed=31):
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    X = rng.uniform(-1.0, 1.0, size=(n_samples, n_features))
+    if kind == "oscillator":
+        t = X[:, 0] + 0.5 * X[:, 1]
+        y = np.exp(-0.8 * np.abs(t)) * np.cos(3.0 * t) + 0.3 * X[:, 2] ** 2
+    elif kind == "sinc":
+        r = 3.0 * np.sqrt(X[:, 0] ** 2 + X[:, 1] ** 2) + 1e-9
+        y = np.sin(r) / r + 0.2 * X[:, 2]
+    elif kind == "friedman":
+        y = (np.sin(np.pi * X[:, 0] * X[:, 1]) + 2 * (X[:, 2] - 0.5) ** 2
+             + X[:, 3] + 0.5 * X[:, 4])
+    elif kind == "quadratic":
+        y = X[:, 0] ** 2 - 0.5 * X[:, 1] * X[:, 2] + 0.3 * X[:, 3]
+    else:
+        raise ValueError(kind)
+    y = y + 0.02 * rng.normal(size=n_samples)
+    n_train = int(0.72 * n_samples)
+    return X[:n_train], X[n_train:], y[:n_train], y[n_train:]
+
+
+def make_mitigation(seed=0, n_states=4, base_p=0.12, readout_err=0.08,
+                    scales=(1.0, 2.0, 3.0)):
+    """Ideal distribution -> depolarizing at each scale -> readout confusion."""
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    ideal = rng.dirichlet(np.ones(n_states) * 0.8)
+    confusion = np.eye(n_states) * (1 - readout_err)
+    off = rng.random((n_states, n_states)); np.fill_diagonal(off, 0)
+    confusion += readout_err * off / off.sum(axis=1, keepdims=True)
+    scales = np.asarray(scales, dtype=float)
+    uniform = np.full(n_states, 1.0 / n_states)
+    observed = []
+    for scale in scales:
+        p = min(base_p * scale, 0.95)
+        observed.append(((1 - p) * ideal + p * uniform) @ confusion)
+    return ideal, confusion, scales, np.array(observed)
+
+
+def make_geometry(seed=0, n_atoms=3):
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    coordinates = rng.uniform(-0.9, 0.9, size=(n_atoms, 3))
+    charges = rng.choice([1.0, 1.0, 6.0, 7.0, 8.0], size=n_atoms)
+    return coordinates, charges
+
+
+def make_federated(seed=0, n_clients=5, n_reporting=3, dim=6):
+    import numpy as np
+
+    rng = np.random.default_rng(seed)
+    params = rng.normal(size=(n_reporting, dim))
+    counts = rng.integers(20, 300, size=n_reporting)
+    return params, counts, n_clients
+
+
+def make_real(name):
+    """Standardised real tabular data subsets (sklearn bundled)."""
+    import numpy as np
+    from sklearn import datasets as skd
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
+
+    if name == "breast_cancer":
+        X, y = skd.load_breast_cancer(return_X_y=True); n = 200
+    elif name == "wine":
+        X, y = skd.load_wine(return_X_y=True); n = 150
+    elif name == "iris":
+        X, y = skd.load_iris(return_X_y=True); n = 150
+    elif name == "digits_3v8":
+        X, y = skd.load_digits(return_X_y=True)
+        keep = (y == 3) | (y == 8); X, y = X[keep], (y[keep] == 8).astype(int); n = 200
+    else:
+        raise ValueError(name)
+    if n < len(X):
+        X, _, y, _ = train_test_split(X, y, train_size=n, random_state=23, stratify=y)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=23, stratify=y)
+    scaler = StandardScaler().fit(X_train)
+    return scaler.transform(X_train), scaler.transform(X_test), y_train, y_test
 
 
 # %%
