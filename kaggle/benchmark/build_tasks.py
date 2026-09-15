@@ -75,7 +75,7 @@ Return only one ```python code block.\\
 
 @kbench.task(name="qmlf-projected-kernel-at-scale",
              description="Escape exponential kernel concentration at 10 qubits without reducing dimensionality.")
-def qmlf_projected_kernel_at_scale(llm) -> dict:
+def qmlf_projected_kernel_at_scale(llm) -> float:
     qmlf = _ensure_qmlf()
     import numpy as np
     from sklearn.metrics import accuracy_score
@@ -96,12 +96,12 @@ def qmlf_projected_kernel_at_scale(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {{error}}")
-    kbench.assertions.assert_true(ok_type, expectation="Must return a fitted qmlf.QuantumClassifier")
-    kbench.assertions.assert_true(n_qubits == 10, expectation=f"All 10 features must be encoded (n_qubits_ == 10, no reduction). Got {{n_qubits}}")
-    kbench.assertions.assert_true(offdiag >= 0.10, expectation=f"Kernel must not be concentrated: offdiag >= 0.10 (naive gives {R['A2_naive_offdiag']:.4f}). Got {{offdiag:.4f}}")
-    kbench.assertions.assert_true(acc >= 0.85, expectation=f"Accuracy >= 0.85 (naive {R['A2_naive_acc']:.2f}, tuned {R['A2_tuned']['projected'][0]:.2f}). Got {{acc:.3f}}")
-    return {{"accuracy": acc, "offdiag_mean": offdiag, "n_qubits": n_qubits, "error": error}}
+    _assert(error is None, expectation=f"Model code must run. Got: {{error}}")
+    _assert(ok_type, expectation="Must return a fitted qmlf.QuantumClassifier")
+    _assert(n_qubits == 10, expectation=f"All 10 features must be encoded (n_qubits_ == 10, no reduction). Got {{n_qubits}}")
+    _assert(offdiag >= 0.10, expectation=f"Kernel must not be concentrated: offdiag >= 0.10 (naive gives {R['A2_naive_offdiag']:.4f}). Got {{offdiag:.4f}}")
+    _assert(acc >= 0.85, expectation=f"Accuracy >= 0.85 (naive {R['A2_naive_acc']:.2f}, tuned {R['A2_tuned']['projected'][0]:.2f}). Got {{acc:.3f}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -147,7 +147,7 @@ scores, or similar). Return only one ```python code block.\\
 
 @kbench.task(name="qmlf-ard-noise-suppression",
              description="Find hidden noise features and suppress them with a per-feature quantum-kernel bandwidth.")
-def qmlf_ard_noise_suppression(llm) -> dict:
+def qmlf_ard_noise_suppression(llm) -> float:
     _ensure_qmlf()
     import numpy as np
     from sklearn.metrics import accuracy_score
@@ -169,10 +169,10 @@ def qmlf_ard_noise_suppression(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {{error}}")
-    kbench.assertions.assert_true(ratio <= 0.30, expectation=f"Noise-feature bandwidth must be <= 0.30x informative mean. Got ratio {{ratio:.3f}}")
-    kbench.assertions.assert_true(acc >= 0.78, expectation=f"Accuracy >= 0.78 (best scalar {R['A3_scalar_best']:.3f}, ARD {R['A3_ard_best']:.3f}). Got {{acc:.3f}}")
-    return {{"accuracy": acc, "noise_to_informative_bandwidth_ratio": ratio, "error": error}}
+    _assert(error is None, expectation=f"Model code must run. Got: {{error}}")
+    _assert(ratio <= 0.30, expectation=f"Noise-feature bandwidth must be <= 0.30x informative mean. Got ratio {{ratio:.3f}}")
+    _assert(acc >= 0.78, expectation=f"Accuracy >= 0.78 (best scalar {R['A3_scalar_best']:.3f}, ARD {R['A3_ard_best']:.3f}). Got {{acc:.3f}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -213,7 +213,7 @@ scored on both. Choose the configuration.\\
 
 @kbench.task(name="qmlf-entanglement-is-not-free",
              description="Reach the accuracy bar with the minimum number of entangling gates.")
-def qmlf_entanglement_is_not_free(llm) -> dict:
+def qmlf_entanglement_is_not_free(llm) -> float:
     qmlf = _ensure_qmlf()
     import warnings
 
@@ -234,10 +234,10 @@ def qmlf_entanglement_is_not_free(llm) -> dict:
     except Exception as exc:
         error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Configuration must be valid. Got: {{error}}")
-    kbench.assertions.assert_true(acc >= 0.90, expectation=f"Accuracy >= 0.90. Got {{acc:.3f}}")
-    kbench.assertions.assert_true(gates == 0, expectation=f"The bar is reachable with zero entangling gates ('z' map scores {R['A4']['z'][0]:.2f}); used {{gates}}")
-    return {{"feature_map": plan.feature_map, "accuracy": acc, "entangling_gates": gates, "error": error}}
+    _assert(error is None, expectation=f"Configuration must be valid. Got: {{error}}")
+    _assert(acc >= 0.90, expectation=f"Accuracy >= 0.90. Got {{acc:.3f}}")
+    _assert(gates == 0, expectation=f"The bar is reachable with zero entangling gates ('z' map scores {R['A4']['z'][0]:.2f}); used {{gates}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -284,7 +284,7 @@ _CATEGORY = {{"classical kernel can match": "classical-matchable",
 
 @kbench.task(name="qmlf-advantage-screen-judgment",
              description="Run the Huang et al. geometric-difference screen and make the right deployment call on two datasets.")
-def qmlf_advantage_screen_judgment(llm) -> dict:
+def qmlf_advantage_screen_judgment(llm) -> float:
     qmlf = _ensure_qmlf()
     import numpy as np
 
@@ -310,11 +310,11 @@ def qmlf_advantage_screen_judgment(llm) -> dict:
                               ref_g=ref["geometric_difference"], ref_category=ref_cat)
 
     for name, o in outcomes.items():
-        kbench.assertions.assert_true(o["error"] is None, expectation=f"[{{name}}] model code must run. Got: {{o['error']}}")
-        kbench.assertions.assert_true(o["g_ok"], expectation=f"[{{name}}] g must be within 15% of the screen's value {{o['ref_g']:.2f}}")
-        kbench.assertions.assert_true(o["cat_ok"], expectation=f"[{{name}}] verdict category must be {{o['ref_category']!r}}")
-        kbench.assertions.assert_true(o["rec_ok"], expectation=f"[{{name}}] recommendation must follow the conservative policy")
-    return outcomes
+        _assert(o["error"] is None, expectation=f"[{{name}}] model code must run. Got: {{o['error']}}")
+        _assert(o["g_ok"], expectation=f"[{{name}}] g must be within 15% of the screen's value {{o['ref_g']:.2f}}")
+        _assert(o["cat_ok"], expectation=f"[{{name}}] verdict category must be {{o['ref_category']!r}}")
+        _assert(o["rec_ok"], expectation=f"[{{name}}] recommendation must follow the conservative policy")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -359,7 +359,7 @@ Return only one ```python code block.\\
 
 @kbench.task(name="qmlf-classical-baseline-honesty",
              description="Build a competent classical baseline AND a tuned quantum model; report calibrated estimates and a consistent verdict.")
-def qmlf_classical_baseline_honesty(llm) -> dict:
+def qmlf_classical_baseline_honesty(llm) -> float:
     _ensure_qmlf()
     import numpy as np
     from sklearn.metrics import accuracy_score
@@ -382,12 +382,12 @@ def qmlf_classical_baseline_honesty(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {{error}}")
-    kbench.assertions.assert_true(c_acc >= 0.70, expectation=f"Classical baseline must be competent (>= 0.70; standard models score 0.77-0.87, a sandbagged one 0.50). Got {{c_acc:.3f}}")
-    kbench.assertions.assert_true(q_acc >= 0.73, expectation=f"Quantum model must be tuned (>= 0.73; auto gives {R['B2_quantum_auto_acc']:.3f}). Got {{q_acc:.3f}}")
-    kbench.assertions.assert_true(consistent, expectation=f"Declared winner {{winner!r}} must follow the model's own estimates (classical {{c_est}}, quantum {{q_est}})")
-    kbench.assertions.assert_true(calibrated, expectation=f"Estimates must not overstate held-out reality by more than 12 points (estimates {{c_est}}/{{q_est}} vs test {{c_acc:.3f}}/{{q_acc:.3f}})")
-    return {{"classical_accuracy": c_acc, "quantum_accuracy": q_acc, "classical_estimate": c_est, "quantum_estimate": q_est, "declared_winner": winner, "error": error}}
+    _assert(error is None, expectation=f"Model code must run. Got: {{error}}")
+    _assert(c_acc >= 0.70, expectation=f"Classical baseline must be competent (>= 0.70; standard models score 0.77-0.87, a sandbagged one 0.50). Got {{c_acc:.3f}}")
+    _assert(q_acc >= 0.73, expectation=f"Quantum model must be tuned (>= 0.73; auto gives {R['B2_quantum_auto_acc']:.3f}). Got {{q_acc:.3f}}")
+    _assert(consistent, expectation=f"Declared winner {{winner!r}} must follow the model's own estimates (classical {{c_est}}, quantum {{q_est}})")
+    _assert(calibrated, expectation=f"Estimates must not overstate held-out reality by more than 12 points (estimates {{c_est}}/{{q_est}} vs test {{c_acc:.3f}}/{{q_acc:.3f}})")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -429,7 +429,7 @@ test accuracy >= 0.58. Maximise m within the budget. Return only one
 
 @kbench.task(name="qmlf-circuit-budget-nystrom",
              description="Stay inside a hardware circuit budget with Nystrom landmarks while keeping accuracy.")
-def qmlf_circuit_budget_nystrom(llm) -> dict:
+def qmlf_circuit_budget_nystrom(llm) -> float:
     qmlf = _ensure_qmlf()
     import numpy as np
     from sklearn.svm import LinearSVC
@@ -458,11 +458,11 @@ def qmlf_circuit_budget_nystrom(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {{error}}")
-    kbench.assertions.assert_true(ok_type, expectation="Must return a fitted qmlf.QuantumKernel")
-    kbench.assertions.assert_true(cost is not None and cost <= budget, expectation=f"Nystrom cost must be <= {{budget}} circuits (pairwise needs {R['C1_pairwise']:,}). Got {{cost}} with m={{m}}")
-    kbench.assertions.assert_true(acc >= 0.58, expectation=f"Accuracy >= 0.58 (m={R['C1_m_max']} gives {R['C1_acc_m70']:.3f}). Got {{acc:.3f}}")
-    return {{"n_landmarks": m, "circuits": cost, "accuracy": acc, "error": error}}
+    _assert(error is None, expectation=f"Model code must run. Got: {{error}}")
+    _assert(ok_type, expectation="Must return a fitted qmlf.QuantumKernel")
+    _assert(cost is not None and cost <= budget, expectation=f"Nystrom cost must be <= {{budget}} circuits (pairwise needs {R['C1_pairwise']:,}). Got {{cost}} with m={{m}}")
+    _assert(acc >= 0.58, expectation=f"Accuracy >= 0.58 (m={R['C1_m_max']} gives {R['C1_acc_m70']:.3f}). Got {{acc:.3f}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -502,7 +502,7 @@ only one ```python code block.\\
 
 @kbench.task(name="qmlf-nisq-transpile-honesty",
              description="Report real transpiled resources, not the analytic projection, and label each correctly.")
-def qmlf_nisq_transpile_honesty(llm) -> dict:
+def qmlf_nisq_transpile_honesty(llm) -> float:
     _ensure_qmlf()
     from qiskit.circuit.library import zz_feature_map
 
@@ -519,11 +519,11 @@ def qmlf_nisq_transpile_honesty(llm) -> dict:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
     T, E = {R['C2_transpiled']['optimized_depth']}, {R['C2_estimate']['optimized_depth']}
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {{error}}")
-    kbench.assertions.assert_true(mode == "transpiled", expectation=f"Measured numbers must come from the real transpiler (mode 'transpiled'). Got {{mode!r}}")
-    kbench.assertions.assert_true(md == T and mg == {R['C2_transpiled']['optimized_two_qubit_gates']}, expectation=f"Measured depth/2q-gates must be {{T}}/{R['C2_transpiled']['optimized_two_qubit_gates']}. Got {{md}}/{{mg}}")
-    kbench.assertions.assert_true(ed == E, expectation=f"Estimated depth (analytic path) must be {{E}}. Got {{ed}}")
-    return {{"measured_depth": md, "measured_two_qubit_gates": mg, "estimated_depth": ed, "mode": mode, "error": error}}
+    _assert(error is None, expectation=f"Model code must run. Got: {{error}}")
+    _assert(mode == "transpiled", expectation=f"Measured numbers must come from the real transpiler (mode 'transpiled'). Got {{mode!r}}")
+    _assert(md == T and mg == {R['C2_transpiled']['optimized_two_qubit_gates']}, expectation=f"Measured depth/2q-gates must be {{T}}/{R['C2_transpiled']['optimized_two_qubit_gates']}. Got {{md}}/{{mg}}")
+    _assert(ed == E, expectation=f"Estimated depth (analytic path) must be {{E}}. Got {{ed}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -566,7 +566,7 @@ gets ~0.06; raw ~0.12). Return only one ```python code block.\\
 
 @kbench.task(name="qmlf-mitigation-pipeline",
              description="Chain readout correction and ZNE correctly to recover an ideal distribution.")
-def qmlf_mitigation_pipeline(llm) -> dict:
+def qmlf_mitigation_pipeline(llm) -> float:
     _ensure_qmlf()
     import numpy as np
 
@@ -583,10 +583,10 @@ def qmlf_mitigation_pipeline(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {{error}}")
-    kbench.assertions.assert_true(valid, expectation="Result must be a valid length-4 probability distribution")
-    kbench.assertions.assert_true(l1 <= 0.035, expectation=f"L1 to ideal must be <= 0.035 (pipeline reference {R['D1_pipeline_l1']:.4f}, readout-only {R['D1_readout_only_best_l1']:.4f}). Got {{l1:.4f}}")
-    return {{"l1_to_ideal": l1, "error": error}}
+    _assert(error is None, expectation=f"Model code must run. Got: {{error}}")
+    _assert(valid, expectation="Result must be a valid length-4 probability distribution")
+    _assert(l1 <= 0.035, expectation=f"L1 to ideal must be <= 0.035 (pipeline reference {R['D1_pipeline_l1']:.4f}, readout-only {R['D1_readout_only_best_l1']:.4f}). Got {{l1:.4f}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -630,7 +630,7 @@ only one ```python code block.\\
 
 @kbench.task(name="qmlf-qnn-reproducible-training",
              description="Train a variational QNN layer so two seeded runs are bit-identical and the loss falls >= 20%.")
-def qmlf_qnn_reproducible_training(llm) -> dict:
+def qmlf_qnn_reproducible_training(llm) -> float:
     _ensure_qmlf(with_torch=True)
     import numpy as np
 
@@ -658,12 +658,12 @@ def qmlf_qnn_reproducible_training(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run (twice). Got: {{error}}")
-    kbench.assertions.assert_true(same_losses, expectation="Loss curves of two same-seed runs must be identical")
-    kbench.assertions.assert_true(same_preds, expectation="Predictions of two same-seed runs must be identical (dropout must be off at inference)")
-    kbench.assertions.assert_true(inference_det, expectation="Returned model must be deterministic at inference: two forward passes differ, so dropout is still active (torch.no_grad() is not .eval())")
-    kbench.assertions.assert_true(drop >= 20.0, expectation=f"Final loss must be >= 20% below the first (reference {R['E1_loss_drop_pct']:.1f}%). Got {{drop:.1f}}%")
-    return {{"loss_drop_pct": drop, "reproducible": bool(same_losses and same_preds), "inference_deterministic": inference_det, "error": error}}
+    _assert(error is None, expectation=f"Model code must run (twice). Got: {{error}}")
+    _assert(same_losses, expectation="Loss curves of two same-seed runs must be identical")
+    _assert(same_preds, expectation="Predictions of two same-seed runs must be identical (dropout must be off at inference)")
+    _assert(inference_det, expectation="Returned model must be deterministic at inference: two forward passes differ, so dropout is still active (torch.no_grad() is not .eval())")
+    _assert(drop >= 20.0, expectation=f"Final loss must be >= 20% below the first (reference {R['E1_loss_drop_pct']:.1f}%). Got {{drop:.1f}}%")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -704,7 +704,7 @@ being converged (within 0.3 of it). Return only one ```python code block.\\
 
 @kbench.task(name="qmlf-vqe-variational-principle",
              description="Deliver exact and deterministic VQE energies that respect the variational bound.")
-def qmlf_vqe_variational_principle(llm) -> dict:
+def qmlf_vqe_variational_principle(llm) -> float:
     _ensure_qmlf()
     import numpy as np
 
@@ -723,11 +723,11 @@ def qmlf_vqe_variational_principle(llm) -> dict:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
     EXACT, OPMIN = {R['E2_exact']!r}, {R['E2_operator_min']!r}
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run (twice). Got: {{error}}")
-    kbench.assertions.assert_true(exact is not None and abs(exact - EXACT) < 1e-9, expectation=f"exact must equal {{EXACT:.9f}}. Got {{exact}}")
-    kbench.assertions.assert_true(vqe_a is not None and vqe_a == vqe_b, expectation=f"VQE must be deterministic across calls. Got {{vqe_a}} vs {{vqe_b}}")
-    kbench.assertions.assert_true(vqe_a is not None and OPMIN - 1e-6 <= vqe_a <= OPMIN + 0.3, expectation=f"VQE must lie in [{{OPMIN:.4f}}, {{OPMIN + 0.3:.4f}}] (variational bound, converged). Got {{vqe_a}}")
-    return {{"exact": exact, "vqe": vqe_a, "vqe_repeat": vqe_b, "error": error}}
+    _assert(error is None, expectation=f"Model code must run (twice). Got: {{error}}")
+    _assert(exact is not None and abs(exact - EXACT) < 1e-9, expectation=f"exact must equal {{EXACT:.9f}}. Got {{exact}}")
+    _assert(vqe_a is not None and vqe_a == vqe_b, expectation=f"VQE must be deterministic across calls. Got {{vqe_a}} vs {{vqe_b}}")
+    _assert(vqe_a is not None and OPMIN - 1e-6 <= vqe_a <= OPMIN + 0.3, expectation=f"VQE must lie in [{{OPMIN:.4f}}, {{OPMIN + 0.3:.4f}}] (variational bound, converged). Got {{vqe_a}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -770,7 +770,7 @@ pipeline. Choose the configuration.\\
 
 @kbench.task(name="qmlf-industrial-wide-data-pipeline",
              description="Configure a production quantum-kernel pipeline on real 30-feature data: reduce, encode, tune.")
-def qmlf_industrial_wide_data_pipeline(llm) -> dict:
+def qmlf_industrial_wide_data_pipeline(llm) -> float:
     qmlf = _ensure_qmlf()
     import warnings
 
@@ -791,10 +791,10 @@ def qmlf_industrial_wide_data_pipeline(llm) -> dict:
     except Exception as exc:
         error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Configuration must be valid and fit within limits. Got: {{error}}")
-    kbench.assertions.assert_true(verdict is not None and verdict != "severely concentrated", expectation=f"Fitted kernel must not be severely concentrated. Got {{verdict!r}}")
-    kbench.assertions.assert_true(acc >= 0.88, expectation=f"Accuracy >= 0.88 (naive {R['F1_naive_acc']:.2f}, auto {R['F1_auto_acc']:.2f}). Got {{acc:.3f}}")
-    return {{"accuracy": acc, "verdict": verdict, "plan": plan.model_dump(), "error": error}}
+    _assert(error is None, expectation=f"Configuration must be valid and fit within limits. Got: {{error}}")
+    _assert(verdict is not None and verdict != "severely concentrated", expectation=f"Fitted kernel must not be severely concentrated. Got {{verdict!r}}")
+    _assert(acc >= 0.88, expectation=f"Accuracy >= 0.88 (naive {R['F1_naive_acc']:.2f}, auto {R['F1_auto_acc']:.2f}). Got {{acc:.3f}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -832,7 +832,7 @@ differently. Choose the configuration.\\
 
 @kbench.task(name="qmlf-regression-physical-model",
              description="Regress a damped-oscillator response with a quantum kernel ridge that generalises.")
-def qmlf_regression_physical_model(llm) -> dict:
+def qmlf_regression_physical_model(llm) -> float:
     qmlf = _ensure_qmlf()
     import warnings
     from sklearn.metrics import r2_score
@@ -852,9 +852,9 @@ def qmlf_regression_physical_model(llm) -> dict:
     except Exception as exc:
         error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Configuration must be valid. Got: {{error}}")
-    kbench.assertions.assert_true(r2 >= 0.40, expectation=f"R^2 >= 0.40 (fidelity auto {R['F2_auto_r2']:.2f}, projected {R['F2_projected_r2']:.2f}). Got {{r2:.3f}}")
-    return {{"r2": r2, "plan": plan.model_dump(), "error": error}}
+    _assert(error is None, expectation=f"Configuration must be valid. Got: {{error}}")
+    _assert(r2 >= 0.40, expectation=f"R^2 >= 0.40 (fidelity auto {R['F2_auto_r2']:.2f}, projected {R['F2_projected_r2']:.2f}). Got {{r2:.3f}}")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -908,7 +908,7 @@ X_test, observed) in one ```python code block.\\
 
 @kbench.task(name="qmlf-debug-broken-pipeline",
              description="Find and fix four planted bugs in a quantum kernel + mitigation pipeline.")
-def qmlf_debug_broken_pipeline(llm) -> dict:
+def qmlf_debug_broken_pipeline(llm) -> float:
     _ensure_qmlf()
     import numpy as np
     from sklearn.metrics import accuracy_score
@@ -936,11 +936,11 @@ def qmlf_debug_broken_pipeline(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(not bypass, expectation="Must not hand .fidelity_quantum_kernel to QSVC: it bypasses whitening, normalize and bandwidth (one of the planted bugs)")
-    kbench.assertions.assert_true(error is None, expectation=f"Repaired code must run. Got: {{error}}")
-    kbench.assertions.assert_true(acc >= 0.90, expectation=f"Accuracy >= 0.90 (correct pipeline {R['F3_correct_acc']:.2f}; the QSVC bypass gives {R['F3_bypass_acc']:.2f}). Got {{acc:.3f}}")
-    kbench.assertions.assert_true(mit_ok, expectation="mitigated must be a valid length-4 distribution from ZNE over all three scales")
-    return {{"accuracy": acc, "mitigated_ok": mit_ok, "error": error}}
+    _assert(not bypass, expectation="Must not hand .fidelity_quantum_kernel to QSVC: it bypasses whitening, normalize and bandwidth (one of the planted bugs)")
+    _assert(error is None, expectation=f"Repaired code must run. Got: {{error}}")
+    _assert(acc >= 0.90, expectation=f"Accuracy >= 0.90 (correct pipeline {R['F3_correct_acc']:.2f}; the QSVC bypass gives {R['F3_bypass_acc']:.2f}). Got {{acc:.3f}}")
+    _assert(mit_ok, expectation="mitigated must be a valid length-4 distribution from ZNE over all three scales")
+    return _fraction_recorded()
 ''')
 
 # =============================================================================
@@ -975,7 +975,7 @@ Return only one ```python code block.\\
 
 @kbench.task(name="qmlf-federated-partial-participation",
              description="Produce the exact sample-weighted FedAvg update under partial client participation.")
-def qmlf_federated_partial_participation(llm) -> dict:
+def qmlf_federated_partial_participation(llm) -> float:
     _ensure_qmlf()
     import numpy as np
 
@@ -994,10 +994,10 @@ def qmlf_federated_partial_participation(llm) -> dict:
         except Exception as exc:
             error = f"{{type(exc).__name__}}: {{exc}}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {{error}}")
-    kbench.assertions.assert_true(not is_unweighted, expectation="Unweighted mean is the classic FedAvg mistake; weight by sample count")
-    kbench.assertions.assert_true(ok, expectation="Global vector must equal the sample-weighted mean to 1e-9")
-    return {{"correct": ok, "unweighted_mistake": is_unweighted, "error": error}}
+    _assert(error is None, expectation=f"Model code must run. Got: {{error}}")
+    _assert(not is_unweighted, expectation="Unweighted mean is the classic FedAvg mistake; weight by sample count")
+    _assert(ok, expectation="Global vector must equal the sample-weighted mean to 1e-9")
+    return _fraction_recorded()
 ''')
 
 
@@ -1006,14 +1006,23 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     for t in TASKS:
         text = HEADER.format(title=t["title"], doc=t["doc"], common=COMMON) + t["body"] + FOOTER.format(func=t["func"])
-        # Every task's return value goes through the JSON sanitiser.
-        # Only the LAST such line is the task function's return (string
-        # literals holding example code can contain earlier ones).
+        # Tasks now return a float (the fraction of checks passed), because
+        # Kaggle scores the RETURN value and accepts only a number or a bool --
+        # a returned dict is stored as resultCase "none" and scores 0.00. No
+        # JSON sanitising is needed for a float, but assert that the task really
+        # does end in the fraction helper so a stray dict return cannot silently
+        # zero out a task's score again.
+        #
+        # Exactly one such return, and it must be the LAST function-level one:
+        # string literals holding example code (the debug task's BROKEN script)
+        # have return lines of their own. A "matches somewhere" check passed
+        # while BROKEN's own return had been rewritten into the helper, which
+        # took the return contract out of the prompt and failed every model.
         import re
-        matches = list(re.finditer(r"^(    return )(\{.*\}|outcomes)$", text, flags=re.MULTILINE))
-        assert matches, t["slug"]
-        m = matches[-1]
-        text = text[:m.start()] + m.group(1) + "_jsonable(" + m.group(2) + ")" + text[m.end():]
+        returns = re.findall(r"^    return .*$", text, flags=re.MULTILINE)
+        helper_returns = re.findall(r"^\s*return _fraction_recorded\(\)\s*$", text, flags=re.MULTILINE)
+        assert len(helper_returns) == 1 and returns and returns[-1] == "    return _fraction_recorded()", \
+            f"{t['slug']}: only the task function's final return may call _fraction_recorded() (found {len(helper_returns)})"
         path = os.path.join(out_dir, t["slug"] + ".py")
         open(path, "w").write(text)
         compile(text, path, "exec")

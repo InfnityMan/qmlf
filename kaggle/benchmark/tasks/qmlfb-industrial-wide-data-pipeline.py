@@ -161,6 +161,54 @@ def _jsonable(obj):
     return obj
 
 
+_RECORDED_CHECKS = []
+
+
+def _assert(ok, expectation):
+    """Record a check, then forward it to kbench as a normal assertion.
+
+    The hand-built tasks assert inline rather than building a `checks` list, so
+    this keeps a tally alongside kbench's own record. `_fraction_recorded()`
+    then returns what Kaggle actually scores. kbench.assertions.assert_true does
+    not abort on failure (a failing task still evaluates its later assertions),
+    so every check is recorded and the task still reaches its return.
+    """
+    ok = bool(ok)
+    _RECORDED_CHECKS.append(ok)
+    kbench.assertions.assert_true(ok, expectation=expectation)
+
+    return ok
+
+
+def _fraction_recorded():
+    """Fraction of the checks recorded by _assert that passed."""
+    if not _RECORDED_CHECKS:
+        return 0.0
+
+    return float(sum(_RECORDED_CHECKS)) / float(len(_RECORDED_CHECKS))
+
+
+def _fraction_passed(checks):
+    """Fraction of grader checks that passed, as a float in [0, 1].
+
+    This is the value Kaggle scores. Kaggle's leaderboard reads the task's
+    RETURN value and accepts only a number or a bool; a dict is stored as
+    resultCase "none" and contributes nothing, which is how 91 tasks with
+    passing assertions still aggregated to 0.00.
+
+    Partial credit rather than all-or-nothing: on a benchmark this hard an
+    all-or-nothing metric collapses to a wall of zeros and stops
+    discriminating, while 2-of-3 vs 0-of-3 is exactly the signal worth seeing.
+    `checks` is the list of (ok, expectation) pairs the graders already build.
+    """
+    checks = list(checks)
+
+    if not checks:
+        return 0.0
+
+    return float(sum(1 for ok, _ in checks if ok)) / float(len(checks))
+
+
 # ---- deterministic datasets ------------------------------------------------
 
 def _split(X, y, test_size=0.25, seed=7, stratify=True):
@@ -485,7 +533,7 @@ pipeline. Choose the configuration.\
 
 @kbench.task(name="qmlfb-industrial-wide-data-pipeline",
              description="Configure a production quantum-kernel pipeline on real 30-feature data: reduce, encode, tune.")
-def qmlf_industrial_wide_data_pipeline(llm) -> dict:
+def qmlf_industrial_wide_data_pipeline(llm) -> float:
     qmlf = _ensure_qmlf()
     import warnings
 
@@ -506,10 +554,10 @@ def qmlf_industrial_wide_data_pipeline(llm) -> dict:
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Configuration must be valid and fit within limits. Got: {error}")
-    kbench.assertions.assert_true(verdict is not None and verdict != "severely concentrated", expectation=f"Fitted kernel must not be severely concentrated. Got {verdict!r}")
-    kbench.assertions.assert_true(acc >= 0.88, expectation=f"Accuracy >= 0.88 (naive 0.62, auto 0.92). Got {acc:.3f}")
-    return _jsonable({"accuracy": acc, "verdict": verdict, "plan": plan.model_dump(), "error": error})
+    _assert(error is None, expectation=f"Configuration must be valid and fit within limits. Got: {error}")
+    _assert(verdict is not None and verdict != "severely concentrated", expectation=f"Fitted kernel must not be severely concentrated. Got {verdict!r}")
+    _assert(acc >= 0.88, expectation=f"Accuracy >= 0.88 (naive 0.62, auto 0.92). Got {acc:.3f}")
+    return _fraction_recorded()
 
 
 # %%

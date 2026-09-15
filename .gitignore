@@ -7,6 +7,11 @@ dist/
 .pytest_cache/
 .idea/
 
+# Local agent tooling (installed skills and their lockfile). Never part of qmlf.
+.agents/
+.claude/
+skills-lock.json
+
 # Kaggle benchmark working artifacts: downloaded run output and the binary
 # wheelhouse payload (73MB of wheels; rebuild command lives in kaggle/README.md)
 kaggle/results/

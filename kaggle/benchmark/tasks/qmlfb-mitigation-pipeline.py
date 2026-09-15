@@ -161,6 +161,54 @@ def _jsonable(obj):
     return obj
 
 
+_RECORDED_CHECKS = []
+
+
+def _assert(ok, expectation):
+    """Record a check, then forward it to kbench as a normal assertion.
+
+    The hand-built tasks assert inline rather than building a `checks` list, so
+    this keeps a tally alongside kbench's own record. `_fraction_recorded()`
+    then returns what Kaggle actually scores. kbench.assertions.assert_true does
+    not abort on failure (a failing task still evaluates its later assertions),
+    so every check is recorded and the task still reaches its return.
+    """
+    ok = bool(ok)
+    _RECORDED_CHECKS.append(ok)
+    kbench.assertions.assert_true(ok, expectation=expectation)
+
+    return ok
+
+
+def _fraction_recorded():
+    """Fraction of the checks recorded by _assert that passed."""
+    if not _RECORDED_CHECKS:
+        return 0.0
+
+    return float(sum(_RECORDED_CHECKS)) / float(len(_RECORDED_CHECKS))
+
+
+def _fraction_passed(checks):
+    """Fraction of grader checks that passed, as a float in [0, 1].
+
+    This is the value Kaggle scores. Kaggle's leaderboard reads the task's
+    RETURN value and accepts only a number or a bool; a dict is stored as
+    resultCase "none" and contributes nothing, which is how 91 tasks with
+    passing assertions still aggregated to 0.00.
+
+    Partial credit rather than all-or-nothing: on a benchmark this hard an
+    all-or-nothing metric collapses to a wall of zeros and stops
+    discriminating, while 2-of-3 vs 0-of-3 is exactly the signal worth seeing.
+    `checks` is the list of (ok, expectation) pairs the graders already build.
+    """
+    checks = list(checks)
+
+    if not checks:
+        return 0.0
+
+    return float(sum(1 for ok, _ in checks if ok)) / float(len(checks))
+
+
 # ---- deterministic datasets ------------------------------------------------
 
 def _split(X, y, test_size=0.25, seed=7, stratify=True):
@@ -485,7 +533,7 @@ gets ~0.06; raw ~0.12). Return only one ```python code block.\
 
 @kbench.task(name="qmlfb-mitigation-pipeline",
              description="Chain readout correction and ZNE correctly to recover an ideal distribution.")
-def qmlf_mitigation_pipeline(llm) -> dict:
+def qmlf_mitigation_pipeline(llm) -> float:
     _ensure_qmlf()
     import numpy as np
 
@@ -502,10 +550,10 @@ def qmlf_mitigation_pipeline(llm) -> dict:
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {error}")
-    kbench.assertions.assert_true(valid, expectation="Result must be a valid length-4 probability distribution")
-    kbench.assertions.assert_true(l1 <= 0.035, expectation=f"L1 to ideal must be <= 0.035 (pipeline reference 0.0225, readout-only 0.0601). Got {l1:.4f}")
-    return _jsonable({"l1_to_ideal": l1, "error": error})
+    _assert(error is None, expectation=f"Model code must run. Got: {error}")
+    _assert(valid, expectation="Result must be a valid length-4 probability distribution")
+    _assert(l1 <= 0.035, expectation=f"L1 to ideal must be <= 0.035 (pipeline reference 0.0225, readout-only 0.0601). Got {l1:.4f}")
+    return _fraction_recorded()
 
 
 # %%

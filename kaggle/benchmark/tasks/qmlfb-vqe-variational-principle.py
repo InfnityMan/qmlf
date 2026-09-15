@@ -160,6 +160,54 @@ def _jsonable(obj):
     return obj
 
 
+_RECORDED_CHECKS = []
+
+
+def _assert(ok, expectation):
+    """Record a check, then forward it to kbench as a normal assertion.
+
+    The hand-built tasks assert inline rather than building a `checks` list, so
+    this keeps a tally alongside kbench's own record. `_fraction_recorded()`
+    then returns what Kaggle actually scores. kbench.assertions.assert_true does
+    not abort on failure (a failing task still evaluates its later assertions),
+    so every check is recorded and the task still reaches its return.
+    """
+    ok = bool(ok)
+    _RECORDED_CHECKS.append(ok)
+    kbench.assertions.assert_true(ok, expectation=expectation)
+
+    return ok
+
+
+def _fraction_recorded():
+    """Fraction of the checks recorded by _assert that passed."""
+    if not _RECORDED_CHECKS:
+        return 0.0
+
+    return float(sum(_RECORDED_CHECKS)) / float(len(_RECORDED_CHECKS))
+
+
+def _fraction_passed(checks):
+    """Fraction of grader checks that passed, as a float in [0, 1].
+
+    This is the value Kaggle scores. Kaggle's leaderboard reads the task's
+    RETURN value and accepts only a number or a bool; a dict is stored as
+    resultCase "none" and contributes nothing, which is how 91 tasks with
+    passing assertions still aggregated to 0.00.
+
+    Partial credit rather than all-or-nothing: on a benchmark this hard an
+    all-or-nothing metric collapses to a wall of zeros and stops
+    discriminating, while 2-of-3 vs 0-of-3 is exactly the signal worth seeing.
+    `checks` is the list of (ok, expectation) pairs the graders already build.
+    """
+    checks = list(checks)
+
+    if not checks:
+        return 0.0
+
+    return float(sum(1 for ok, _ in checks if ok)) / float(len(checks))
+
+
 # ---- deterministic datasets ------------------------------------------------
 
 def _split(X, y, test_size=0.25, seed=7, stratify=True):
@@ -483,7 +531,7 @@ being converged (within 0.3 of it). Return only one ```python code block.\
 
 @kbench.task(name="qmlfb-vqe-variational-principle",
              description="Deliver exact and deterministic VQE energies that respect the variational bound.")
-def qmlf_vqe_variational_principle(llm) -> dict:
+def qmlf_vqe_variational_principle(llm) -> float:
     _ensure_qmlf()
     import numpy as np
 
@@ -502,11 +550,11 @@ def qmlf_vqe_variational_principle(llm) -> dict:
             error = f"{type(exc).__name__}: {exc}"
 
     EXACT, OPMIN = -3.2716139792464234, -12.74335518859687
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run (twice). Got: {error}")
-    kbench.assertions.assert_true(exact is not None and abs(exact - EXACT) < 1e-9, expectation=f"exact must equal {EXACT:.9f}. Got {exact}")
-    kbench.assertions.assert_true(vqe_a is not None and vqe_a == vqe_b, expectation=f"VQE must be deterministic across calls. Got {vqe_a} vs {vqe_b}")
-    kbench.assertions.assert_true(vqe_a is not None and OPMIN - 1e-6 <= vqe_a <= OPMIN + 0.3, expectation=f"VQE must lie in [{OPMIN:.4f}, {OPMIN + 0.3:.4f}] (variational bound, converged). Got {vqe_a}")
-    return _jsonable({"exact": exact, "vqe": vqe_a, "vqe_repeat": vqe_b, "error": error})
+    _assert(error is None, expectation=f"Model code must run (twice). Got: {error}")
+    _assert(exact is not None and abs(exact - EXACT) < 1e-9, expectation=f"exact must equal {EXACT:.9f}. Got {exact}")
+    _assert(vqe_a is not None and vqe_a == vqe_b, expectation=f"VQE must be deterministic across calls. Got {vqe_a} vs {vqe_b}")
+    _assert(vqe_a is not None and OPMIN - 1e-6 <= vqe_a <= OPMIN + 0.3, expectation=f"VQE must lie in [{OPMIN:.4f}, {OPMIN + 0.3:.4f}] (variational bound, converged). Got {vqe_a}")
+    return _fraction_recorded()
 
 
 # %%

@@ -159,6 +159,54 @@ def _jsonable(obj):
     return obj
 
 
+_RECORDED_CHECKS = []
+
+
+def _assert(ok, expectation):
+    """Record a check, then forward it to kbench as a normal assertion.
+
+    The hand-built tasks assert inline rather than building a `checks` list, so
+    this keeps a tally alongside kbench's own record. `_fraction_recorded()`
+    then returns what Kaggle actually scores. kbench.assertions.assert_true does
+    not abort on failure (a failing task still evaluates its later assertions),
+    so every check is recorded and the task still reaches its return.
+    """
+    ok = bool(ok)
+    _RECORDED_CHECKS.append(ok)
+    kbench.assertions.assert_true(ok, expectation=expectation)
+
+    return ok
+
+
+def _fraction_recorded():
+    """Fraction of the checks recorded by _assert that passed."""
+    if not _RECORDED_CHECKS:
+        return 0.0
+
+    return float(sum(_RECORDED_CHECKS)) / float(len(_RECORDED_CHECKS))
+
+
+def _fraction_passed(checks):
+    """Fraction of grader checks that passed, as a float in [0, 1].
+
+    This is the value Kaggle scores. Kaggle's leaderboard reads the task's
+    RETURN value and accepts only a number or a bool; a dict is stored as
+    resultCase "none" and contributes nothing, which is how 91 tasks with
+    passing assertions still aggregated to 0.00.
+
+    Partial credit rather than all-or-nothing: on a benchmark this hard an
+    all-or-nothing metric collapses to a wall of zeros and stops
+    discriminating, while 2-of-3 vs 0-of-3 is exactly the signal worth seeing.
+    `checks` is the list of (ok, expectation) pairs the graders already build.
+    """
+    checks = list(checks)
+
+    if not checks:
+        return 0.0
+
+    return float(sum(1 for ok, _ in checks if ok)) / float(len(checks))
+
+
 # ---- deterministic datasets ------------------------------------------------
 
 def _split(X, y, test_size=0.25, seed=7, stratify=True):
@@ -477,7 +525,7 @@ Return only one ```python code block.\
 
 @kbench.task(name="qmlfb-federated-partial-participation",
              description="Produce the exact sample-weighted FedAvg update under partial client participation.")
-def qmlf_federated_partial_participation(llm) -> dict:
+def qmlf_federated_partial_participation(llm) -> float:
     _ensure_qmlf()
     import numpy as np
 
@@ -496,10 +544,10 @@ def qmlf_federated_partial_participation(llm) -> dict:
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
 
-    kbench.assertions.assert_true(error is None, expectation=f"Model code must run. Got: {error}")
-    kbench.assertions.assert_true(not is_unweighted, expectation="Unweighted mean is the classic FedAvg mistake; weight by sample count")
-    kbench.assertions.assert_true(ok, expectation="Global vector must equal the sample-weighted mean to 1e-9")
-    return _jsonable({"correct": ok, "unweighted_mistake": is_unweighted, "error": error})
+    _assert(error is None, expectation=f"Model code must run. Got: {error}")
+    _assert(not is_unweighted, expectation="Unweighted mean is the classic FedAvg mistake; weight by sample count")
+    _assert(ok, expectation="Global vector must equal the sample-weighted mean to 1e-9")
+    return _fraction_recorded()
 
 
 # %%
