@@ -4,8 +4,7 @@
 
 I measured every number in this section myself and quote each one with its
 workload, baseline and method; none of it comes from anywhere else. The
-timings ran in Kaggle notebooks, so you can rerun them on the same kind of
-machine. All of them used `OMP_NUM_THREADS=1`, which is qmlf's import default.
+timings were measured on Kaggle's standard notebooks. All of them used `OMP_NUM_THREADS=1`, which is qmlf's import default.
 
 - **CPU:** a Kaggle CPU session on an AMD EPYC 7B12 (31 GB RAM) with Ubuntu
   24.04, Python 3.13.18, numpy 2.1.3 (OpenBLAS), qiskit 2.6.2, torch 2.11.0,

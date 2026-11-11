@@ -277,9 +277,9 @@ processes, which is the property a benchmark or a paper actually needs.
 
 ## Speed without changing any answer
 
-Every number in this section comes from Kaggle notebooks, so you can rerun it
-on the same machines: a CPU session (AMD EPYC 7B12) and a "GPU T4 x2" session,
-both on Python 3.13 with `OMP_NUM_THREADS=1`. The CHANGELOG lists the software
+Every number in this section was measured on Kaggle's standard notebook
+machines: a CPU session (AMD EPYC 7B12) and a "GPU T4 x2" session, both on
+Python 3.13 with `OMP_NUM_THREADS=1`. The CHANGELOG lists the software
 versions, workloads and method. Other hardware will give other numbers.
 
 Simulating one statevector per sample is nearly the whole cost of a quantum
