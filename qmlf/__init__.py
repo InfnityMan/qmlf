@@ -1,4 +1,4 @@
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 import os
 
@@ -14,7 +14,14 @@ import os
 # setdefault, so an OMP_NUM_THREADS the caller already chose is left alone.
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-from .ops.q_ops_core import QuantumKernel, run_quantum_benchmark, plot_hilbert_space
+from .ops.q_ops_core import (
+    QuantumKernel,
+    run_quantum_benchmark,
+    plot_hilbert_space,
+    clear_state_cache,
+    set_state_cache_limit,
+    state_cache_info,
+)
 from .models.q_models import (
     QuantumClassifier,
     QuantumRegressor,
@@ -76,6 +83,9 @@ __all__ = [
     "QuantumKernel",
     "run_quantum_benchmark",
     "plot_hilbert_space",
+    "clear_state_cache",
+    "set_state_cache_limit",
+    "state_cache_info",
     *sorted(_LAZY_ATTRS),
 ]
 

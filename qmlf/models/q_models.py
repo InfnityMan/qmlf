@@ -6,7 +6,7 @@ from sklearn.decomposition import PCA
 from sklearn.model_selection import StratifiedKFold
 from sklearn.svm import SVC
 
-from qmlf.ops.q_ops_core import QuantumKernel
+from qmlf.ops.q_ops_core import QuantumKernel, _double_center
 
 # Whitened modes take their safe normalisation by default (see __init__).
 # fisher whitens too (by within-class scatter), so it needs the same guard.
@@ -32,6 +32,23 @@ _DEFAULT_MAX_QUBITS = 8
 # accuracy, healthy tuned kernels 0.17-0.77).
 _SEVERE_CONCENTRATION = 0.05
 _MILD_CONCENTRATION = 0.15
+
+
+def _offdiag_mean(gram):
+    """Mean off-diagonal Gram value -- the concentration indicator."""
+    n = gram.shape[0]
+
+    return float(gram[~np.eye(n, dtype=bool)].mean())
+
+
+def _concentration_verdict(offdiag_mean):
+    if offdiag_mean < _SEVERE_CONCENTRATION:
+        return "severely concentrated"
+
+    if offdiag_mean < _MILD_CONCENTRATION:
+        return "concentrated"
+
+    return "healthy"
 
 
 def kernel_diagnostics(gram, y=None):
@@ -74,8 +91,7 @@ def kernel_diagnostics(gram, y=None):
         )
 
     n = gram.shape[0]
-    off_mask = ~np.eye(n, dtype=bool)
-    offdiag_mean = float(gram[off_mask].mean())
+    offdiag_mean = _offdiag_mean(gram)
 
     eigenvalues = np.linalg.eigvalsh((gram + gram.T) / 2)
     total = float(eigenvalues.sum())
@@ -89,21 +105,16 @@ def kernel_diagnostics(gram, y=None):
 
         # Centered alignment: H = I - 11^T/n double-centres both matrices,
         # removing the diagonal/mean bias that lets an identity-like kernel
-        # score well against the +1 diagonal of the target.
-        centering = np.eye(n) - np.ones((n, n)) / n
-        gram_centered = centering @ gram @ centering
-        target_centered = centering @ target @ centering
+        # score well against the +1 diagonal of the target. Subtracting row and
+        # column means is the same operation without the two n x n matmuls.
+        gram_centered = _double_center(gram)
+        target_centered = _double_center(target)
 
         denom = np.linalg.norm(gram_centered) * np.linalg.norm(target_centered)
         alignment = float((gram_centered * target_centered).sum() / denom) \
             if denom > 0 else float("nan")
 
-    if offdiag_mean < _SEVERE_CONCENTRATION:
-        verdict = "severely concentrated"
-    elif offdiag_mean < _MILD_CONCENTRATION:
-        verdict = "concentrated"
-    else:
-        verdict = "healthy"
+    verdict = _concentration_verdict(offdiag_mean)
 
     return {
         "offdiag_mean": offdiag_mean,
@@ -140,6 +151,24 @@ class QuantumClassifier(BaseEstimator, ClassifierMixin):
     safe normalisation  ``normalize=``              ``_resolved_normalize()``
     ==================  =========================  ========================
 
+    Simulation
+    ----------
+    ``simulator="qiskit"`` (default) simulates every sample through qiskit and
+    is bit-for-bit what every published number was computed with.
+    ``simulator="fused"`` runs the whole batch through qmlf.ops.fused in
+    complex128: kernel values measured within 2e-14 of qiskit's, and a default
+    ``fit`` was 18-19x faster on first use and 23-50x on later fits (measured
+    at 8 and 12 qubits on a Kaggle CPU), so a bandwidth sweep at 10+ qubits
+    becomes practical. The SVM downstream is not always that insensitive:
+    where libsvm is ill-conditioned or two CV scores nearly tie, a 1e-14
+    change in the Gram matrix can move the selected bandwidth or a
+    prediction. Reproduce published numbers with ``"qiskit"``.
+    ``simulator="torch"`` does the same on a torch device (``device=`` or the
+    best available: CUDA, then Apple MPS, then CPU). MPS has no 64-bit
+    floats, so there the states are complex64 and Gram entries carry float32
+    rounding. On CUDA (a Kaggle T4) everything stays complex128, within 2e-14
+    of qiskit. See the CHANGELOG for the method.
+
     Selection
     ---------
     ``bandwidth="auto"`` (default) sweeps ``bandwidths`` by deterministic
@@ -173,9 +202,11 @@ class QuantumClassifier(BaseEstimator, ClassifierMixin):
     def __init__(self, mode="ZZ", bandwidth="auto", normalize=None,
                  feature_map="zz", entanglement=None, reps=2, C=1.0,
                  bandwidths=None, cv=3, max_qubits=_DEFAULT_MAX_QUBITS,
-                 kernel="fidelity", gamma="auto"):
+                 kernel="fidelity", gamma="auto", simulator="qiskit", device=None):
         self.kernel = kernel
         self.gamma = gamma
+        self.simulator = simulator
+        self.device = device
         self.mode = mode
         self.bandwidth = bandwidth
         self.normalize = normalize
@@ -217,6 +248,8 @@ class QuantumClassifier(BaseEstimator, ClassifierMixin):
             feature_map=feature_map,
             kernel=kernel,
             gamma=self.gamma,
+            simulator=self.simulator,
+            device=self.device,
             **kwargs
         )
 
@@ -383,12 +416,17 @@ class QuantumClassifier(BaseEstimator, ClassifierMixin):
         # Post-fit guard: a severely concentrated kernel means the SVM is
         # memorising, whatever the training accuracy says. Better to hear it
         # now than on the test set.
-        report = kernel_diagnostics(self._gram_fit)
+        #
+        # Only the verdict is needed here, and that is the off-diagonal mean
+        # alone -- an O(n^2) read. Calling the full report also ran an
+        # eigendecomposition of the training Gram matrix (O(n^3)) on every fit
+        # and threw the spectrum away. diagnose() still reports it.
+        offdiag_mean = _offdiag_mean(self._gram_fit)
 
-        if report["verdict"] == "severely concentrated":
+        if _concentration_verdict(offdiag_mean) == "severely concentrated":
             warnings.warn(
                 f"The fitted training kernel is severely concentrated "
-                f"(off-diagonal mean {report['offdiag_mean']:.4f}); the model "
+                f"(off-diagonal mean {offdiag_mean:.4f}); the model "
                 "will generalise poorly. A smaller bandwidth, bandwidth='auto', "
                 "or kernel='projected' usually fixes this. See .diagnose().",
                 UserWarning,
@@ -477,9 +515,11 @@ class QuantumRegressor(BaseEstimator, RegressorMixin):
     def __init__(self, mode="ZZ", bandwidth="auto", normalize=None,
                  feature_map="zz", entanglement=None, reps=2, alpha=1e-3,
                  bandwidths=None, cv=3, max_qubits=_DEFAULT_MAX_QUBITS,
-                 kernel="fidelity", gamma="auto"):
+                 kernel="fidelity", gamma="auto", simulator="qiskit", device=None):
         self.kernel = kernel
         self.gamma = gamma
+        self.simulator = simulator
+        self.device = device
         self.mode = mode
         self.bandwidth = bandwidth
         self.normalize = normalize

@@ -59,6 +59,7 @@ def _run_benchmark(args):
         bandwidth=args.bandwidth,
         normalize=args.normalize,
         feature_map=args.feature_map,
+        simulator=args.simulator,
         **({} if args.entanglement is None else {"entanglement": args.entanglement})
     )
 
@@ -82,6 +83,7 @@ def _run_visualize(args):
         bandwidth=args.bandwidth,
         normalize=args.normalize,
         feature_map=args.feature_map,
+        simulator=args.simulator,
         **({} if args.entanglement is None else {"entanglement": args.entanglement})
     )
 
@@ -200,6 +202,21 @@ def _add_kernel_tuning_arguments(subparser):
     )
 
 
+def _add_simulator_argument(subparser):
+    subparser.add_argument(
+        "--simulator",
+        default="qiskit",
+        choices=["qiskit", "fused", "torch"],
+        help=(
+            "'qiskit' (default) is the exact reference. 'fused' simulates the "
+            "whole batch at once in complex128: kernel values measured within "
+            "2e-14 of qiskit's, though a near-tied model selection can still "
+            "go the other way. 'torch' does the same on the best torch device "
+            "(CUDA, then Apple MPS in complex64, then CPU)."
+        )
+    )
+
+
 def _add_dataset_arguments(subparser):
     subparser.add_argument(
         "--csv",
@@ -258,6 +275,7 @@ def build_parser():
 
     _add_dataset_arguments(benchmark)
     _add_kernel_tuning_arguments(benchmark)
+    _add_simulator_argument(benchmark)
 
     benchmark.add_argument(
         "--mode",
@@ -283,6 +301,7 @@ def build_parser():
 
     _add_dataset_arguments(visualize)
     _add_kernel_tuning_arguments(visualize)
+    _add_simulator_argument(visualize)
 
     visualize.add_argument(
         "--mode",

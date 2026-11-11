@@ -5,8 +5,9 @@ from torch import nn
 from qiskit.circuit.library import zz_feature_map
 from qiskit.circuit.library import real_amplitudes
 
-from qiskit.primitives import StatevectorEstimator
 from qiskit.quantum_info import SparsePauliOp
+
+from qmlf.ops.shared_estimator import SharedStateEstimator
 
 from qiskit_machine_learning.neural_networks import EstimatorQNN
 from qiskit_machine_learning.connectors import TorchConnector
@@ -73,7 +74,10 @@ class AdvancedQuantumTransformerLayer(nn.Module):
             self.ansatz
         )
 
-        self.estimator = StatevectorEstimator()
+        # Shares one simulation across the per-qubit Z observables; see
+        # qmlf.ops.shared_estimator. Same numbers, fewer simulations -- and
+        # this layer evaluates the quantum sublayer once per token.
+        self.estimator = SharedStateEstimator()
 
         self.gradient = (
             ParamShiftEstimatorGradient(

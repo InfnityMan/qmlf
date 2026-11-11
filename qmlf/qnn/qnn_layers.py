@@ -5,9 +5,10 @@ from torch import nn
 from qiskit.circuit.library import zz_feature_map, real_amplitudes
 from qiskit_machine_learning.neural_networks import EstimatorQNN
 from qiskit_machine_learning.connectors import TorchConnector
-from qiskit.primitives import StatevectorEstimator
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_algorithms.gradients import ParamShiftEstimatorGradient
+
+from qmlf.ops.shared_estimator import SharedStateEstimator
 
 
 class AdvancedIBIInitializer:
@@ -74,7 +75,12 @@ class AdvancedQuantumNNLayer(nn.Module):
 
         self.num_params = len(self.ansatz.parameters)
 
-        self.estimator = StatevectorEstimator()
+        # One simulation per sample, shared by the per-qubit Z observables,
+        # instead of one per (sample, observable) pair -- same numbers, and it
+        # divides both forward and parameter-shift backward cost by roughly the
+        # qubit count. Falls back to the stock estimator when sampling
+        # (precision > 0), where the noise draws are part of the result.
+        self.estimator = SharedStateEstimator()
         self.gradient = ParamShiftEstimatorGradient(self.estimator)
 
         self.observables = self._create_observables()

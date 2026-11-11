@@ -1,10 +1,17 @@
+import hashlib
+import numbers
+import os
+import threading
 import warnings
+from collections import OrderedDict
 
 import numpy as np
 import pandas as pd
-from qiskit.circuit import QuantumCircuit
+from qiskit.circuit import Barrier, Delay, Gate, ParameterExpression, QuantumCircuit
 from qiskit.circuit.library import z_feature_map, zz_feature_map
 from qiskit.quantum_info import Statevector
+
+from qmlf.ops import fused
 from qiskit_machine_learning.kernels import FidelityQuantumKernel
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score
@@ -31,6 +38,326 @@ _VALID_MODES = ("ZZ",) + _WHITENED_MODES
 _VALID_KERNELS = ("fidelity", "projected")
 
 _BUILTIN_FEATURE_MAPS = ("zz", "z")
+
+# "qiskit" simulates each sample gate by gate through qiskit's Statevector --
+# the reference, and bit-for-bit what every published number was computed
+# with. "fused" (numpy, complex128) and "torch" (complex128 on CPU/CUDA,
+# complex64 on Apple MPS) run the whole batch through qmlf.ops.fused instead.
+_VALID_SIMULATORS = ("qiskit", "fused", "torch")
+
+# ---------------------------------------------------------------------------
+# Simulated-state cache
+#
+# Simulating one statevector per sample is the dominant cost of every
+# evaluation path, and the same rows are simulated over and over: a cross
+# kernel re-simulates the training rows it was just fitted on, a CV sweep
+# re-simulates each fold's training rows once per fold, and every predict()
+# call re-simulates the entire training set. The state a row encodes to is a
+# pure function of (encoding circuit, angles), so reusing it is exact rather
+# than approximate -- entries are keyed by both, and eviction costs time, never
+# accuracy. Whitened modes prepare different angles per fold and simply miss,
+# which is the correct behaviour.
+#
+# The limit is a byte budget (QMLF_STATE_CACHE_MB, default 64) because one
+# entry is 2**n_qubits complex amplitudes: 256 bytes at 4 qubits, 64 KB at 12.
+# ---------------------------------------------------------------------------
+_STATE_CACHE = OrderedDict()
+_STATE_CACHE_BYTES = 0
+# The dict, the byte counter and the budget are module-level mutable state, and
+# a caller may well reach them from several threads (joblib's threading
+# backend, a thread per request in a service). Every read-modify-write below
+# takes this lock: without it, "is the dict non-empty" followed by popitem, or
+# .get followed by .move_to_end, can lose the race and raise KeyError out of
+# the middle of compute_kernel_matrix.
+_CACHE_LOCK = threading.Lock()
+
+
+def _budget_from_environment():
+    raw = os.environ.get("QMLF_STATE_CACHE_MB", "64")
+
+    try:
+        megabytes = max(0.0, float(raw))
+    except (TypeError, ValueError):
+        # A performance knob must never be the reason `import qmlf` fails.
+        warnings.warn(
+            f"QMLF_STATE_CACHE_MB={raw!r} is not a number; using the default 64 MB.",
+            UserWarning,
+            stacklevel=2,
+        )
+        megabytes = 64.0
+
+    return int(megabytes * 1024 ** 2)
+
+
+_STATE_CACHE_LIMIT = _budget_from_environment()
+
+
+def state_cache_info():
+    """Entries, bytes held, and the byte budget of the simulated-state cache."""
+    with _CACHE_LOCK:
+        return {
+            "entries": len(_STATE_CACHE),
+            "bytes": _STATE_CACHE_BYTES,
+            "limit_bytes": _STATE_CACHE_LIMIT,
+        }
+
+
+def clear_state_cache():
+    """Drop every cached statevector. Results are unaffected, only timings."""
+    global _STATE_CACHE_BYTES
+
+    with _CACHE_LOCK:
+        _STATE_CACHE.clear()
+        _STATE_CACHE_BYTES = 0
+
+
+def set_state_cache_limit(megabytes):
+    """Resize the cache budget; ``0`` disables caching entirely."""
+    global _STATE_CACHE_LIMIT
+
+    with _CACHE_LOCK:
+        _STATE_CACHE_LIMIT = max(0, int(float(megabytes) * 1024 ** 2))
+        _evict_states()
+
+
+def _evict_states():
+    """Evict oldest-first until the budget holds. Caller holds the lock."""
+    global _STATE_CACHE_BYTES
+
+    while _STATE_CACHE and _STATE_CACHE_BYTES > _STATE_CACHE_LIMIT:
+        _, evicted = _STATE_CACHE.popitem(last=False)
+        _STATE_CACHE_BYTES -= evicted.nbytes
+
+    if not _STATE_CACHE:
+        # Re-anchor the counter: an empty cache holds exactly zero bytes, so
+        # any drift cannot survive past here and silently shrink the budget.
+        _STATE_CACHE_BYTES = 0
+
+
+def _cache_get(key):
+    with _CACHE_LOCK:
+        cached = _STATE_CACHE.get(key)
+
+        if cached is not None:
+            _STATE_CACHE.move_to_end(key)
+
+        return cached
+
+
+def _cache_put(key, value):
+    global _STATE_CACHE_BYTES
+
+    # A single entry larger than the whole budget would be evicted immediately.
+    if _STATE_CACHE_LIMIT <= 0 or value.nbytes > _STATE_CACHE_LIMIT:
+        return
+
+    value.setflags(write=False)  # cached arrays are shared; nobody may edit one
+
+    with _CACHE_LOCK:
+        # Two threads can miss on the same row and both put it. Drop whatever
+        # the key held first, so the counter tracks what is actually stored
+        # instead of drifting upward until the cache evicts itself to nothing.
+        previous = _STATE_CACHE.pop(key, None)
+
+        if previous is not None:
+            _STATE_CACHE_BYTES -= previous.nbytes
+
+        _STATE_CACHE[key] = value
+        _STATE_CACHE_BYTES += value.nbytes
+        _evict_states()
+
+
+def _double_center(matrix):
+    """H M H for H = I - 11^T/n, without building H.
+
+    Used by both kernel-target alignment paths; the explicit centring matrix
+    turned an O(n^2) operation into two dense n x n matmuls.
+    """
+    row_means = matrix.mean(axis=1, keepdims=True)
+    column_means = matrix.mean(axis=0, keepdims=True)
+
+    return matrix - row_means - column_means + matrix.mean()
+
+
+class _Unidentifiable(Exception):
+    """Raised when a circuit cannot be described well enough to key a cache."""
+
+
+_STANDARD_GATE_TYPES = None
+_MAX_DEFINITION_DEPTH = 12
+
+
+def _standard_gate_types():
+    global _STANDARD_GATE_TYPES
+
+    if _STANDARD_GATE_TYPES is None:
+        from qiskit.circuit.library import get_standard_gate_name_mapping
+
+        _STANDARD_GATE_TYPES = {
+            name: type(gate) for name, gate in get_standard_gate_name_mapping().items()
+        }
+
+    return _STANDARD_GATE_TYPES
+
+
+def _is_standard(operation):
+    """A library gate whose (name, params) pin down its unitary exactly."""
+    return type(operation) is _standard_gate_types().get(operation.name)
+
+
+def _parameter_key(parameter):
+    """Identify a gate parameter by value, not by how it prints.
+
+    ``str()`` is right for a ParameterExpression (it is exact) and wrong for an
+    array: numpy abbreviates anything past 1000 elements and rounds to 8
+    digits, so two different unitaries print the same and would share a cache
+    entry.
+    """
+    if isinstance(parameter, ParameterExpression):
+        return str(parameter)
+
+    array = np.asarray(parameter)
+
+    if array.dtype == object:
+        raise _Unidentifiable(f"parameter of type {type(parameter)!r}")
+
+    return array.shape, str(array.dtype), array.tobytes()
+
+
+def _circuit_structure(circuit, depth=0):
+    if depth > _MAX_DEFINITION_DEPTH:
+        raise _Unidentifiable("definition nested too deeply")
+
+    entries = [
+        circuit.num_qubits,
+        circuit.num_clbits,
+        str(circuit.global_phase),
+        # assign_parameters binds positionally against circuit.parameters, so
+        # the binding ORDER is part of what a row means. Two circuits whose
+        # gates print identically can still bind the same row differently.
+        tuple(str(parameter) for parameter in circuit.parameters),
+    ]
+
+    for instruction in circuit.data:
+        operation = instruction.operation
+        entry = (
+            operation.name,
+            tuple(circuit.find_bit(qubit).index for qubit in instruction.qubits),
+            tuple(circuit.find_bit(clbit).index for clbit in instruction.clbits),
+            tuple(_parameter_key(parameter) for parameter in operation.params),
+        )
+
+        if not _is_standard(operation) and not isinstance(operation, (Barrier, Delay)):
+            # A composite instruction carries its content in its definition,
+            # not its name: PauliEvolutionGate("XX", t) and
+            # PauliEvolutionGate("ZZ", t) are both named "PauliEvolution" with
+            # the same params. Descend, or refuse to key the circuit at all.
+            definition = getattr(operation, "definition", None)
+
+            if definition is None:
+                raise _Unidentifiable(f"opaque instruction {operation.name!r}")
+
+            entry += (_circuit_structure(definition, depth + 1),)
+
+        entries.append(entry)
+
+    return tuple(entries)
+
+
+def _circuit_key(circuit):
+    """Structural identity of an encoding circuit, as a short digest.
+
+    Object identity is useless here: a CV sweep builds one kernel (and one
+    circuit) per fold from the same arguments, and those folds are exactly
+    where the reuse is. So the key has to be what the circuit DOES -- gates,
+    wires, parameter values and binding order, all the way down through
+    composite instructions.
+
+    Returns ``None`` for a circuit this function cannot pin down exactly
+    (an opaque instruction with no definition, a parameter it cannot hash).
+    Callers then skip the cache and simulate, which is slower and always
+    right; a digest that is merely probable would hand one encoding another
+    encoding's states.
+
+    The structure is hashed to 16 bytes because it is half of every cache key,
+    and every key is held for as long as its entry is: a short digest keeps
+    the keys small and cheap to compare, where the structure itself is a
+    nested tuple as long as the circuit.
+    """
+    try:
+        structure = _circuit_structure(circuit)
+    except _Unidentifiable:
+        return None
+
+    return hashlib.blake2b(repr(structure).encode(), digest_size=16).digest()
+
+
+# ---------------------------------------------------------------------------
+# Lowered circuits for the fused simulators
+#
+# Lowering is dominated by sympy printing every angle expression into numpy
+# code: measured 0.10 s for a 12-qubit ZZ map (156 parametrised gates) on
+# Kaggle's CPU, two-thirds of the 0.15 s it takes to simulate 200 samples
+# through it.
+# QuantumClassifier builds a fresh kernel per CV fold and candidate (22 for
+# the default sweep, counted) around the SAME
+# circuit, so a program is shared by circuit digest, not owned by a kernel: a
+# circuit is lowered once per process. The digest is the state cache's, which
+# already pins down everything lowering reads.
+# ---------------------------------------------------------------------------
+_PROGRAMS = OrderedDict()  # digest -> Program, or the reason it cannot be lowered
+_PROGRAMS_LIMIT = 32
+_PROGRAMS_LOCK = threading.Lock()
+_FALLBACK_WARNED = set()
+
+# The projected kernel on a fused simulator reduces states to Bloch vectors a
+# chunk of rows at a time, so (as on the qiskit path) the whole state table
+# never exists at once: 16 MB is 256 rows at 12 qubits, 16 at 16.
+_FUSED_BLOCH_CHUNK_BYTES = 16 * 2 ** 20
+
+
+def _lowered(signature, circuit):
+    """``(program, None)`` for a circuit digest, or ``(None, reason)``."""
+    with _PROGRAMS_LOCK:
+        entry = _PROGRAMS.get(signature)
+
+        if entry is not None:
+            _PROGRAMS.move_to_end(signature)
+
+    if entry is None:
+        # Outside the lock: lowering takes a while, and two threads lowering
+        # the same circuit at once only duplicate work.
+        try:
+            entry = fused.lower(circuit)
+        except fused.Unsupported as exc:
+            entry = str(exc)
+
+        with _PROGRAMS_LOCK:
+            entry = _PROGRAMS.setdefault(signature, entry)
+            _PROGRAMS.move_to_end(signature)
+
+            while len(_PROGRAMS) > _PROGRAMS_LIMIT:
+                _PROGRAMS.popitem(last=False)
+
+    if isinstance(entry, str):
+        return None, entry
+
+    return entry, None
+
+
+def _warn_fallback(key, simulator, reason):
+    """Warn once per circuit, not once per kernel built around it."""
+    with _PROGRAMS_LOCK:
+        if (key, simulator) in _FALLBACK_WARNED:
+            return
+        _FALLBACK_WARNED.add((key, simulator))
+
+    warnings.warn(
+        f"simulator={simulator!r} cannot run this feature map ({reason}); "
+        "falling back to the qiskit simulator for it.",
+        UserWarning,
+        stacklevel=5,
+    )
 
 # Distinguishes "caller did not pass entanglement" from "caller explicitly asked
 # for the default", so a meaningless combination can be reported instead of
@@ -101,10 +428,11 @@ class QuantumKernel:
       ``n_qubits`` free parameters.
 
     Entanglement drives the concentration that ``bandwidth`` compensates for, so
-    the two interact; sweeping them together is reasonable. On at least one real
-    dataset the unentangled ``"z"`` map matched or beat ``"zz"`` while running
-    6-11x faster, so the entangled default is not automatically the right
-    choice.
+    the two interact; sweeping them together is reasonable. The unentangled
+    ``"z"`` map computed a 200-sample Gram matrix 2.8-8.5x faster than
+    ``"zz"`` at 4-12 qubits (Kaggle, Intel Xeon CPU), and which one
+    classifies better depends on the data, so the entangled default is not
+    automatically the right choice.
 
     Assigning to ``.feature_map`` after construction rebuilds the underlying
     fidelity kernel, so the swap applies to both the statevector and pairwise
@@ -126,7 +454,8 @@ class QuantumKernel:
     def __init__(self, n_qubits=None, mode="ZZ", reps=2, shrinkage=1e-3, *,
                  bandwidth=1.0, normalize=None, feature_map="zz",
                  entanglement=_UNSET, fidelity=None, sampler=None,
-                 fast_statevector="auto", kernel="fidelity", gamma="auto"):
+                 fast_statevector="auto", kernel="fidelity", gamma="auto",
+                 simulator="qiskit", device=None):
         # A concrete circuit already knows its own width, so there is nothing
         # to defer.
         if n_qubits is None and isinstance(feature_map, QuantumCircuit):
@@ -189,6 +518,30 @@ class QuantumKernel:
                 "fidelity or sampler; drop those arguments."
             )
 
+        if simulator not in _VALID_SIMULATORS:
+            raise ValueError(
+                f"Unknown simulator: {simulator!r} (expected one of {_VALID_SIMULATORS})"
+            )
+
+        if simulator != "qiskit" and (fidelity is not None or sampler is not None):
+            raise ValueError(
+                f"simulator={simulator!r} is an exact statevector simulator; a "
+                "custom fidelity or sampler means shots or hardware. Drop one."
+            )
+
+        if device is not None and simulator != "torch":
+            raise ValueError("device= only applies to simulator='torch'")
+
+        if simulator != "qiskit" and fast_statevector is False:
+            raise ValueError(
+                f"simulator={simulator!r} runs on the statevector path, and "
+                "fast_statevector=False asks for qiskit's pairwise fidelity "
+                "circuits instead. Drop one."
+            )
+
+        if simulator == "torch":
+            fused.resolve_device(device)  # a missing torch or a bad device fails here
+
         if gamma != "auto" and (not np.isscalar(gamma) or not np.isfinite(gamma) or gamma <= 0):
             raise ValueError(
                 f"gamma must be a positive finite number or 'auto', got {gamma!r}"
@@ -197,6 +550,8 @@ class QuantumKernel:
         self.kernel = kernel
         self.gamma = gamma
         self.gamma_ = None if gamma == "auto" else float(gamma)
+        self.simulator = simulator
+        self.device = device
         self.bandwidth_ = None  # fitted value when bandwidth == "median"
 
         # Whitened angles routinely leave [-pi, pi] and alias, which collapses
@@ -228,6 +583,7 @@ class QuantumKernel:
         self._entanglement_arg = entanglement
         self._feature_map = None
         self._fidelity_quantum_kernel = None
+        self._circuit_signature = None
 
         if n_qubits is not None:
             self._set_feature_map(
@@ -305,6 +661,9 @@ class QuantumKernel:
         # statevector path but not the pairwise path -- the same result silently
         # depending on which backend happened to be selected.
         self._feature_map = circuit
+        # Cached simulations belong to a circuit, so the key is recomputed
+        # whenever the circuit is swapped.
+        self._circuit_signature = _circuit_key(circuit)
 
         if self._fidelity is None and self._sampler is not None:
             from qiskit_machine_learning.state_fidelities import ComputeUncompute
@@ -522,10 +881,13 @@ class QuantumKernel:
 
     @staticmethod
     def _centered_alignment(gram, target):
-        n = gram.shape[0]
-        centering = np.eye(n) - np.ones((n, n)) / n
-        gram_c = centering @ gram @ centering
-        target_c = centering @ target @ centering
+        # H M H with H = I - 11^T/n is M minus its row means, minus its column
+        # means, plus its grand mean -- so the same centring costs O(n^2)
+        # instead of the two dense n x n matmuls (2n^3 flops) the explicit H
+        # required, and the alignment sweep centres one Gram matrix per
+        # candidate bandwidth.
+        gram_c = _double_center(gram)
+        target_c = _double_center(target)
         denom = np.linalg.norm(gram_c) * np.linalg.norm(target_c)
 
         return float((gram_c * target_c).sum() / denom) if denom > 0 else 0.0
@@ -646,6 +1008,170 @@ class QuantumKernel:
         # fidelity, which is what the default FidelityQuantumKernel gives.
         return not self._custom_fidelity
 
+    def _fused_program(self):
+        """The feature map lowered for the fused simulators, or None.
+
+        None means "use the qiskit simulator": either it was asked for, or the
+        circuit contains something qmlf.ops.fused does not lower, in which case
+        this warns once and the kernel stays exact rather than failing. The
+        lowering is redone whenever the circuit's digest changes, so a caller
+        mutating their own circuit in place is followed, as on the cached path.
+        """
+        if self.simulator == "qiskit":
+            return None
+
+        # Also the state-cache key for the rows simulated with this program.
+        self._circuit_signature = signature = _circuit_key(self.feature_map)
+
+        if signature is None:
+            program = None
+            reason = "it contains an instruction that cannot be identified exactly"
+            warn_key = ("unidentifiable", id(self.feature_map))
+        else:
+            program, reason = _lowered(signature, self.feature_map)
+            warn_key = signature
+
+        if program is None:
+            _warn_fallback(warn_key, self.simulator, reason)
+
+        return program
+
+    def _fused_tag(self):
+        # Part of every cache key the fused paths write. Their states differ
+        # from qiskit's (and complex64 from complex128) in the last bits, so
+        # they must never answer a lookup made by another simulator -- least
+        # of all the default one.
+        if self.simulator == "fused":
+            return ("fused",)
+
+        return ("torch", str(fused.resolve_device(self.device)))
+
+    def _run_fused(self, program, rows):
+        """Simulate ``rows`` with the fused program; a numpy table."""
+        if self.simulator == "fused":
+            return program.statevectors(rows)
+
+        return fused.to_numpy(
+            program.statevectors(rows, backend="torch", device=self.device)
+        )
+
+    def _fused_states(self, program, prepared):
+        """Encoded states of every prepared row, via the fused simulator.
+
+        Through the same row cache as the qiskit path, so a CV sweep, a cross
+        kernel or a predict() does not re-simulate rows it already has. Rows
+        missing from the cache are simulated together in one batch, which is
+        safe because the simulator is batch-invariant.
+        """
+        signature = self._circuit_signature
+
+        if signature is None or _STATE_CACHE_LIMIT <= 0 or len(prepared) == 0:
+            return self._run_fused(program, prepared)
+
+        tag = self._fused_tag()
+        keys = [(signature, tag, row.tobytes()) for row in prepared]
+        states = [_cache_get(key) for key in keys]
+        missing = [i for i, state in enumerate(states) if state is None]
+
+        if not missing:
+            return np.stack(states)
+
+        fresh = self._run_fused(program, prepared[missing])
+
+        for i, state in zip(missing, fresh):
+            state = state.copy()  # its own memory: a view would pin the batch
+            _cache_put(keys[i], state)
+            states[i] = state
+
+        return fresh if len(missing) == len(prepared) else np.stack(states)
+
+    def _fused_gram(self, states_a, states_b, batch_size=None):
+        if self.simulator == "torch":
+            same = states_b is states_a
+            states_a = fused.as_tensor(states_a, self.device)
+            states_b = states_a if same else fused.as_tensor(states_b, self.device)
+
+        return fused.fidelity_gram(states_a, states_b, batch_size)
+
+    def _fused_bloch(self, program, prepared):
+        """Bloch features via the fused simulator, cached per row like the
+        qiskit path's, and never holding more than one chunk of states."""
+        n = self.n_qubits
+        signature = self._circuit_signature
+        use_cache = signature is not None and _STATE_CACHE_LIMIT > 0
+        tag = self._fused_tag() if use_cache else None
+        keys = [(signature, tag, "bloch", row.tobytes()) for row in prepared] \
+            if use_cache else None
+
+        features = np.empty((len(prepared), 3 * n))
+        missing = []
+
+        for i in range(len(prepared)):
+            cached = _cache_get(keys[i]) if use_cache else None
+
+            if cached is None:
+                missing.append(i)
+            else:
+                features[i] = cached
+
+        chunk = max(1, _FUSED_BLOCH_CHUNK_BYTES // (16 * 2 ** n))
+
+        for start in range(0, len(missing), chunk):
+            rows = missing[start:start + chunk]
+            vectors = fused.bloch_features(self._run_fused(program, prepared[rows]), n)
+            features[rows] = vectors
+
+            if use_cache:
+                for i, vector in zip(rows, vectors):
+                    _cache_put(keys[i], vector.copy())
+
+        return features
+
+    def _refresh_signature(self):
+        # Recomputed once per table rather than trusted from construction: a
+        # caller can hand in their own QuantumCircuit and then mutate it in
+        # place, and a cache keyed on a stale digest would answer with the old
+        # circuit's states. Re-digesting costs one pass over the gate list --
+        # nothing next to a single simulation.
+        self._circuit_signature = _circuit_key(self.feature_map)
+
+    def _simulate_row(self, row, store=True):
+        """The encoded state of one prepared angle row, cached across kernels.
+
+        ``store=False`` still reads the cache but does not fill it: the
+        projected kernel only needs the 3 * n_qubits Bloch vector it reduces
+        the state to, and keeping the state as well (2**n_qubits complex
+        amplitudes: 4,096 bytes at 8 qubits against the vector's 192, 21x)
+        would evict the Bloch vectors it does reuse.
+        """
+        if self._circuit_signature is None:
+            return np.asarray(
+                Statevector(self.feature_map.assign_parameters(row)).data
+            )
+
+        key = (self._circuit_signature, row.tobytes())
+        state = _cache_get(key)
+
+        if state is None:
+            state = np.asarray(
+                Statevector(self.feature_map.assign_parameters(row)).data
+            )
+
+            if store:
+                _cache_put(key, state)
+
+        return state
+
+    def _simulate(self, prepared):
+        """Encoded states for every prepared row, one simulation per new row."""
+        self._refresh_signature()
+        states = np.empty((len(prepared), 2 ** self.n_qubits), dtype=complex)
+
+        for i, row in enumerate(prepared):
+            states[i] = self._simulate_row(row)
+
+        return states
+
     def _statevector_kernel(self, A, B=None):
         # For a pure-state fidelity kernel, K[i, j] = |<phi(x_i)|phi(x_j)>|^2.
         # Simulating n statevectors once and taking |Psi Psi^dagger|^2 is
@@ -653,14 +1179,15 @@ class QuantumKernel:
         # O(n) simulations plus one matmul instead of O(n^2) circuit builds.
         # The result is PSD by the Schur product theorem, so enforce_psd would
         # be a no-op on it.
-        def states(M):
-            return np.stack([
-                np.asarray(Statevector(self.feature_map.assign_parameters(row)).data)
-                for row in M
-            ])
+        program = self._fused_program()
 
-        states_a = states(A)
-        states_b = states_a if B is None else states(B)
+        if program is not None:
+            states_a = self._fused_states(program, A)
+            states_b = states_a if B is None else self._fused_states(program, B)
+            return self._fused_gram(states_a, states_b)
+
+        states_a = self._simulate(A)
+        states_b = states_a if B is None else self._simulate(B)
 
         return np.abs(states_a.conj() @ states_b.T) ** 2
 
@@ -746,23 +1273,48 @@ class QuantumKernel:
         these features ARE the reduced-density-matrix distances the projected
         kernel is defined over.
         """
+        program = self._fused_program()
+
+        if program is not None:
+            # Batched simulation and one batched reduction per qubit, in the
+            # same feature order as the loop below.
+            return self._fused_bloch(program, X_prepared)
+
+        self._refresh_signature()
         n = self.n_qubits
         features = np.empty((len(X_prepared), 3 * n))
 
         for i, row in enumerate(X_prepared):
-            amplitudes = np.asarray(
-                Statevector(self.feature_map.assign_parameters(row)).data
+            # Cached per row like the statevectors, under a separate key: the
+            # Bloch reduction costs a reshape and a matmul per qubit on top of
+            # the simulation, and a CV sweep asks for the same rows repeatedly.
+            # One row at a time, so a projected kernel at 12 qubits never holds
+            # the whole state table.
+            key = None if self._circuit_signature is None else (
+                self._circuit_signature, "bloch", row.tobytes()
             )
-            tensor = amplitudes.reshape((2,) * n)
+            cached = None if key is None else _cache_get(key)
+
+            if cached is not None:
+                features[i] = cached
+                continue
+
+            tensor = self._simulate_row(row, store=False).reshape((2,) * n)
+            vector = np.empty(3 * n)
 
             for q in range(n):
                 # 2 x 2^(n-1) slice with qubit q leading; rho_q = M M^dagger.
                 matrix = np.moveaxis(tensor, q, 0).reshape(2, -1)
                 rdm = matrix @ matrix.conj().T
 
-                features[i, 3 * q] = 2.0 * rdm[0, 1].real
-                features[i, 3 * q + 1] = -2.0 * rdm[0, 1].imag
-                features[i, 3 * q + 2] = (rdm[0, 0] - rdm[1, 1]).real
+                vector[3 * q] = 2.0 * rdm[0, 1].real
+                vector[3 * q + 1] = -2.0 * rdm[0, 1].imag
+                vector[3 * q + 2] = (rdm[0, 0] - rdm[1, 1]).real
+
+            features[i] = vector
+
+            if key is not None:
+                _cache_put(key, vector)
 
         return features
 
@@ -796,6 +1348,17 @@ class QuantumKernel:
     def compute_kernel_matrix(self, X, X2=None, batch_size=None):
         # ZZ mode: plain quantum fidelity kernel.
         # covariant mode: covariance-adapted (whitened) quantum fidelity kernel.
+        if batch_size is not None and (
+            isinstance(batch_size, bool)
+            or not isinstance(batch_size, numbers.Integral)
+            or batch_size < 1
+        ):
+            # Every path used to fail on its own terms (a range() error, an
+            # empty vstack, or -- on torch -- a silently wrong-shaped matrix).
+            raise ValueError(
+                f"batch_size must be a positive integer or None, got {batch_size!r}"
+            )
+
         X_prepared = self._prepare(X, "X")
         X2_prepared = self._prepare(X2, "X2") if X2 is not None else None
 
@@ -820,13 +1383,30 @@ class QuantumKernel:
         # batch_size only chunks the final matmul; the statevector table itself
         # is O(n * 2^n_qubits) and stays small at the qubit counts this kernel
         # is usable at.
+        #
+        # Both tables are simulated ONCE, before chunking. Passing each chunk
+        # through _statevector_kernel (as this did) re-simulated the entire
+        # target table per chunk, so batching cost O(n^2 / batch_size)
+        # simulations instead of O(n) -- the smaller the batch, the slower it
+        # got, which is backwards. The chunk shapes below are unchanged, so the
+        # numbers are too.
+        program = self._fused_program()
+
+        if program is not None:
+            states_a = self._fused_states(program, X_prepared)
+            states_b = (states_a if X2_prepared is None
+                        else self._fused_states(program, X2_prepared))
+            return self._fused_gram(states_a, states_b, batch_size)
+
+        states_a = self._simulate(X_prepared)
+        states_b = states_a if X2_prepared is None else self._simulate(X2_prepared)
+
         if batch_size is None:
-            return self._statevector_kernel(X_prepared, X2_prepared)
+            return np.abs(states_a.conj() @ states_b.T) ** 2
 
         rows = [
-            self._statevector_kernel(X_prepared[start:start + batch_size],
-                                     X_prepared if X2_prepared is None else X2_prepared)
-            for start in range(0, X_prepared.shape[0], batch_size)
+            np.abs(states_a[start:start + batch_size].conj() @ states_b.T) ** 2
+            for start in range(0, states_a.shape[0], batch_size)
         ]
 
         return np.vstack(rows)
@@ -901,7 +1481,7 @@ def plot_hilbert_space(kernel_matrix, labels=None, *, show=True, save_path=None)
 
 def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2, *,
                           mode="ZZ", bandwidth=1.0, normalize=None,
-                          feature_map="zz", entanglement=_UNSET):
+                          feature_map="zz", entanglement=_UNSET, simulator="qiskit"):
     # Imported here rather than at module scope: importing torch (via qmlf.qnn)
     # before xgboost segfaults the interpreter on macOS over duplicate libomp.
     import xgboost as xgb
@@ -938,7 +1518,8 @@ def run_quantum_benchmark(X, y, n_qubits=4, reps=2, test_size=0.2, *,
         bandwidth=bandwidth,
         normalize=normalize,
         feature_map=feature_map,
-        entanglement=entanglement
+        entanglement=entanglement,
+        simulator=simulator
     )
     quantum_kernel.fit(X_train)
 

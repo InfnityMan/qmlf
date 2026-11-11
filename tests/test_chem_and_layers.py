@@ -152,3 +152,22 @@ def test_full_pipeline_forward_shape():
             out = pipeline(torch.randn(4, 5))
 
     assert out.shape == (4, 4)
+
+
+def test_layers_use_the_shared_estimator():
+    """Wiring guard: all three layers read every observable off one simulation.
+
+    Reverting any of them to the stock StatevectorEstimator would re-simulate
+    each sample once per qubit, silently multiplying forward and backward cost
+    by the qubit count. See tests/test_shared_estimator.py for the equivalence
+    proof, and qmlf/ops/shared_estimator.py for what it does.
+    """
+    from qmlf.ops.shared_estimator import SharedStateEstimator
+
+    layers = (
+        qmlf.create_advanced_qnn_layer(n_qubits=2, reps=1, output_dim=2),
+        qmlf.create_advanced_hybrid_layer(input_dim=3, n_qubits=2, reps=1, output_dim=2),
+        qmlf.create_advanced_quantum_transformer(n_qubits=2, heads=1, reps=1, embed_dim=3),
+    )
+
+    assert all(isinstance(layer.estimator, SharedStateEstimator) for layer in layers)
